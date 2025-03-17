@@ -11,6 +11,7 @@ Legacy/
 *.dfs0
 *.dfsu
 *.nc
+*.npy
 
 # Compiled Object files
 *.slo
