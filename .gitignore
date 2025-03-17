@@ -1,0 +1,53 @@
+Legacy/
+
+# Prerequisites
+*.d
+*.idea
+# binary files
+*.sms
+*.dwg
+*.dfs2
+*.dfs1
+*.dfs0
+*.dfsu
+*.nc
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+*.vcxproj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# results
+*.bak
+*.xlsx
+*sms
+sms
+*output
+output
+*log
