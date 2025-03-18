@@ -85,7 +85,8 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dMdx = ddx(M0)
     dNdy = ddy(N0)
     
-    H1[1:-1,1:-1]  = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1 = H0.clone()
+    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
     
     # 整段不用，旧的代码
     # 构造 m_right, m_left
@@ -127,10 +128,10 @@ def mass_cartesian_torch(H, Z, M, N, params):
     
     #TODO
     #H_update = bcond_zeta(H, Z, params)
-    H_update = H1
+    #H_update = H1
     # 构造新的 H，不再对 H.clone() 进行切片赋值，而是用 stack 构造新张量
-    #H_new = torch.stack((H0, H1), dim=0)
-    return H_update
+    H_new = torch.stack((H0, H1), dim=0)
+    return H_new
 
 def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     """
@@ -174,9 +175,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     phi = params.centerWeighting0
     Nx = params.Nx
     Ny = params.Ny
-    
-    ududx = ududx_up(M,N,H)
-    
+        
     # 重构流深
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
     # get forcing
@@ -206,7 +205,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     z2_M = Z[1:, :]
     h1_M = H[1, :-1, :]
     h2_M = H[1, 1:, :]
-    flux_sign_M, h1u_M, h2u_M = check_flux_direction_torch(z1_M, z2_M, h1_M, h2_M, dry_limit)
+    flux_sign_M, h1u_M, h2u_M = check_flux_direction_torch(z1_M, z2_M, h1_M, h2_M, params.dry_limit)
 
     cond_m0pos = (m0 >= 0)
     maskD0 = (D0 > Dlimit)
@@ -217,8 +216,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = ududx_up(M,N,H)
-    vdudy = vdudy_up(M,N,H)
+    ududx = ududx_up(M[0],N[0],H[1])
+    vdudy = vdudy_up(M[0],N[0],H[1])
     
     # phi = 1.0 - CC1 * min(np.abs(m0 / max(D0, MinWaterDepth)), np.sqrt(g * D0))
     # M[1, ix, iy] = (phi * m0 + 0.5 * (1.0 - phi) * (m1 + m2)
@@ -227,10 +226,10 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     #             - CC1 * (MU2 - MU1)
     #             - CC2 * (NU2 - NU1) )
     # He&Lu Torch
-    phi_M = 1.0 - (dt/dx)*torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
+    phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
     M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2) 
-            - (dt/dx)* (MU2 - MU1)
-            + dt * ( sustr + f_cor * (n0 + n2 + n3 + n4))
+            - CC1 * (MU2 - MU1)
+            + dt  * ( sustr + f_cor * (n0 + n2 + n3 + n4))
             - CC1 * ududx
             - CC2 * vdudy
             - (dt*g/dx)* D0*(h2u_M - h1u_M) )
@@ -288,16 +287,13 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     # Flux-centered, Liu
     dPdy = ddy(Pa,'inner')
     Pre_grad_y = CC2 * D0 * dPdy / rho_water
-    N[1, ix, iy] = (phi * n0 + 0.5 * (1.0 - phi) * (n3 + n5)
-                - (CC4 * D0 * (h2_update - h1_update) + Pre_grad_y)
-                + dt * (svstr - f_cor*(m0 + m1 + m4 + m5) )
-                - CC2 * (NV2 - NV1)
-                - CC1 * (MV2 - MV1))
-    # TODO !!! He, Torch
-    phi_N = 1.0 - (dt/dy)*torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
-    N_val = phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) \
-            - (dt/dy)*(NV2 - NV1) \
-            - (dt*g/dy)* D0N*(h2u_N - h1u_N)
+                
+    phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
+    N_val = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
+            - (CC4 * D0 * (h2_update - h1_update) + Pre_grad_y)
+            + dt * (svstr - f_cor*(m0 + m1 + m4 + m5) )
+            - CC2 * (NV2 - NV1)
+            - CC1 * (MV2 - MV1))
 
     mask_fs999_N = (flux_sign_N == 999)
     N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
