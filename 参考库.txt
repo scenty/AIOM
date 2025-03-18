@@ -1,0 +1,1 @@
+https://github.com/Amin-Nadimy/Shallow_Water_Equations_NN4PDEs/blob/main/Source_code/Linear/AI4SWE_Linear.py
