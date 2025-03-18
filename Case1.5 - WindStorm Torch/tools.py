@@ -2,6 +2,9 @@ import torch
 import torch.nn.functional as F
 import time
 
+def dd(var): #detach and operations
+    return var.detach().cpu().numpy().squeeze()
+
 def ddx(Y, scheme='edge'):
     #1st order difference along first dimension
     # - Y: 2D tensor
@@ -70,12 +73,15 @@ def ddy(Y, scheme='edge'):
 #         for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
 #     return Yr
 
-def rho2u(Y):
+def rho2u(Y, scheme='inner'):
     #from rho-point to u-point (-1 at first dimension)
     # - Y: 2D tensor
-    #start = time.time()
-    #print(f'{time.time() - start :.9f}')
-    return (torch.roll(Y,1,0) + Y)[1:]/2
+    # - scheme: 'inner' no padding, 'edge' pad so that dimension unchanged
+    if scheme=='inner':
+        out = (torch.roll(Y,1,0) + Y)[1:]/2
+    elif scheme=='edge':
+        out = (torch.roll(Y,1,0) + Y)/2
+    return out
 
 def rho2v(Y):
     #from rho-point to u-point (-1 at first dimension)
@@ -84,17 +90,15 @@ def rho2v(Y):
     #print(f'{time.time() - start :.9f}')
     return (torch.roll(Y,1,1) + Y)[:,1:]/2
 
-def u2rho(Y):
+def u2rho(Y): #equivalent to rho2u
     #from u-point to rho-point (-1 at first dimension)
     # - Y: 2D tensor
     return (torch.roll(Y,1,0) + Y)[1:]/2
 
-def v2rho(Y):
+def v2rho(Y): #equivalent to rho2v
     #from v-point to rho-point (-1 at second dimension)
     # - Y: 2D tensor
     return (torch.roll(Y,1,1) + Y)[:,1:]/2
-
-
 
 def ududx_up(M,N,H):
     # Upwind advection
@@ -144,3 +148,5 @@ def vdudy_up(M,N,H):
     vdudy = t1 + t2 + t3
            
     return vdudy
+
+

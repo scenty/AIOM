@@ -57,4 +57,55 @@ def WindProfile(Wr, rMax, typhoon_Pos, typhoon_Vec, xx, yy):
 
     return Wx, Wy
 
+def generate_wind():
+    # for itime in range(params.NT):
+    #     typhoon_Pos = [200*1e3 + itime*params.dt*params.typhoon_Vec[0], 
+    #                   200*1e3 + itime*params.dt*params.typhoon_Vec[1]]
+    #     Wx[itime], Wy[itime] = WindProfile(params.Wr, params.rMax, typhoon_Pos, params.typhoon_Vec, X, Y)
+    
+    Wx = torch.from_numpy(Wx)
+    Wy = torch.from_numpy(Wy)
+    
+    # Pa = 1000 + Wx*0
+    # Ws = windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)
+    # sustr = params.rho_air / params.rho_water * params.Cd * windSpeed * Wx
+    # svstr = params.rho_air / params.rho_water * params.Cd * windSpeed * Wy
+    #
+    # sustr = np.concatenate((sustr[:,:,0:1], sustr), 2)
+    # svstr = np.concatenate((svstr[:,0:1,:], svstr), 1)
+    # #sustr = np.concatenate((sustr[:,0:1,:], sustr), 1)
+    # #svstr = np.concatenate((svstr[:,:,0:1], svstr), 2)
+    # # lon_u = np.vstack([X[0, :] - 0.5 * (X[1, :] - X[0, :]), 0.5 * (X[:-1, :] + X[1:, :]), X[-1, :] + 0.5 * (X[-1, :] - X[-2, :])])
+    # # lat_u = np.vstack([Y[0, :] - 0.5 * (Y[1, :] - Y[0, :]), 0.5 * (Y[:-1, :] + Y[1:, :]), Y[-1, :] + 0.5 * (Y[-1, :] - Y[-2, :])])
+    # # lon_v = np.hstack([X[:, 0:1] - 0.5 * (X[:, 1:2] - X[:, 0:1]), 0.5 * (X[:, :-1] + X[:, 1:]), X[:, -1:] + 0.5 * (X[:, -1:] - X[:, -2:-1])])
+    # # lat_v = np.hstack([Y[:, 0:1] - 0.5 * (Y[:, 1:2] - Y[:, 0:1]), 0.5 * (Y[:, :-1] + Y[:, 1:]), Y[:, -1:] + 0.5 * (Y[:, -1:] - Y[:, -2:-1])])
+    # lon_u = np.hstack([X[:, 0:1] - 0.5 * (X[:, 1:2] - X[:, 0:1]), 0.5 * (X[:, :-1] + X[:, 1:]), X[:, -1:] + 0.5 * (X[:, -1:] - X[:, -2:-1])])
+    # lat_u = np.hstack([Y[:, 0:1] - 0.5 * (Y[:, 1:2] - Y[:, 0:1]), 0.5 * (Y[:, :-1] + Y[:, 1:]), Y[:, -1:] + 0.5 * (Y[:, -1:] - Y[:, -2:-1])])
+    # lon_v = np.vstack([X[0, :] - 0.5 * (X[1, :] - X[0, :]), 0.5 * (X[:-1, :] + X[1:, :]), X[-1, :] + 0.5 * (X[-1, :] - X[-2, :])])
+    # lat_v = np.vstack([Y[0, :] - 0.5 * (Y[1, :] - Y[0, :]), 0.5 * (Y[:-1, :] + Y[1:, :]), Y[-1, :] + 0.5 * (Y[-1, :] - Y[-2, :])])
+    # time = (  np.arange(0, (NT)*dt,dt, dtype=np.float64) )/86400.
+    # ds_out = xr.Dataset(
+    #         {'sustr': (['sms_time','lat_u', 'lon_u'], sustr.swapaxes(1,2)*1e3),  #for ROMS
+    #          'svstr': (['sms_time','lat_v', 'lon_v'], svstr.swapaxes(1,2)*1e3),
+    #          'lon_u': (['lat_u','lon_u'], lon_u.transpose()),
+    #          'lat_u': (['lat_u','lon_u'], lat_u.transpose()),
+    #          'lon_v': (['lat_v','lon_v'], lon_v.transpose()),
+    #          'lat_v': (['lat_v','lon_v'], lat_v.transpose())},
+    #         coords={
+    #             'sms_time': time}   )
+    # #写入字段
+    # ds_out['sustr'].attrs['long_name'] = "sustr"
+    # ds_out['sustr'].attrs['units'] = "N m-2"
+    # ds_out['sustr'].attrs['coordinates'] = "lat_u lon_u"
+    # ds_out['sustr'].attrs['time'] = "sms_time"
+    # ds_out['svstr'].attrs['long_name'] = "svstr"
+    # ds_out['svstr'].attrs['units'] = "N m-2"
+    # ds_out['svstr'].attrs['coordinates'] = "lat_v lon_v"
+    # ds_out['svstr'].attrs['time'] = "sms_time" 
+    
+    # ds_out['sms_time'].attrs['units'] = "days since 0001-01-01 00:00:00"
+    
+    # ds_out.to_netcdf('WindStrMove'+str(Wr)+str(int(rMax/1000))+'.nc')
 
+    #pcolor(X,Y,(Wx**2+Wy**2)**0.5);colorbar()
+    return Wx, Wy

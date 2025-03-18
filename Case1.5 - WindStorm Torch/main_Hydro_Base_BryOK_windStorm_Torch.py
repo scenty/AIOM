@@ -8,7 +8,7 @@ from matplotlib.pyplot import *
 import xarray as xr
 import torch
 import torch.nn.functional as F
-from tools import ddx,ddy,rho2u,rho2v
+from tools import ddx,ddy,rho2u,rho2v,dd
 from tools import ududx_up,vdudy_up
 
 class Params:
@@ -20,7 +20,7 @@ class Params:
         self.Ny = 50
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
-        self.depth = 50.0
+        self.depth = 10.0
         
         # Physical constants
         self.g = 9.8
@@ -38,9 +38,9 @@ class Params:
         self.centerWeighting0 = 0.9998
         
         # Boundary conditions
-        self.obc_ele = ['Rad', 'Clo', 'Clo', 'Clo']
-        self.obc_u2d = ['Rad', 'Clo', 'Clo', 'Clo'] 
-        self.obc_v2d = ['Rad', 'Clo', 'Clo', 'Clo']
+        self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
+        self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo'] 
+        self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
         
         # Temporary variables
         self.CC1 = self.dt / self.dx
@@ -87,22 +87,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     
     H1 = H0.clone()
     H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
-    
-    # 整段不用，旧的代码
-    # 构造 m_right, m_left
-    #M0 = M[0]
-    # m_right = torch.zeros((Nx, Ny), dtype=M0.dtype, device=M0.device)
-    # m_right[:Nx-1, :] = M0
-    # m_left = torch.zeros_like(m_right)
-    # m_left[1:Nx, :] = M0
-    # # 构造 n_up, n_down
-    # N0 = N[0]
-    # n_up = torch.zeros((Nx, Ny), dtype=N0.dtype, device=N0.device)
-    # n_up[:, :Ny-1] = N0
-    # n_down = torch.zeros_like(n_up)
-    # n_down[:, 1:Ny] = N0
-    # H1_old = H0 - CC1*(m_right - m_left) - CC2*(n_up - n_down)
-    
+        
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
     # mask_deep = (Z <= -dry_limit)
@@ -127,10 +112,10 @@ def mass_cartesian_torch(H, Z, M, N, params):
     # H1 = torch.where(c5, torch.zeros_like(H1), H1)
     
     #TODO
-    #H_update = bcond_zeta(H, Z, params)
-    #H_update = H1
+    
     # 构造新的 H，不再对 H.clone() 进行切片赋值，而是用 stack 构造新张量
     H_new = torch.stack((H0, H1), dim=0)
+    H_new = bcond_zeta(H_new, Z, params)
     return H_new
 
 def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
@@ -170,13 +155,13 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     g = params.g
     MinWaterDepth = params.MinWaterDepth
     FrictionDepthLimit = params.FrictionDepthLimit
-    manning = params.manning
+    Cf = params.manning
     dt = params.dt
     phi = params.centerWeighting0
     Nx = params.Nx
     Ny = params.Ny
         
-    # 重构流深
+    # 重构流深, TODO(check Lechi的修改)
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
     # get forcing
     windSpeed = np.sqrt(Wx * Wx + Wy * Wy)
@@ -188,18 +173,12 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     m0 = M[0]
     Nx_m, Ny_m = m0.shape
     D0 = D_M 
-    # 构造 m1, m2
-    m1 = torch.zeros_like(m0)
-    m2 = torch.zeros_like(m0)
-    if Nx_m > 1:
-        m1[1:, :] = m0[:-1, :]
-        m2[:-1, :] = m0[1:, :]
-
-    D1 = torch.zeros_like(D0)
-    D2 = torch.zeros_like(D0)
-    if Nx_m > 1:
-        D1[1:, :] = D0[:-1, :]
-        D2[:-1, :] = D0[1:, :]
+    # 构造 m1(i.e., m_(i-1) ), m2(mi+1)
+    m1 = torch.roll(m0,-1, dims=0) #roll down, and discard last row
+    m2 = torch.roll(m0, 1, dims=0) #roll up, and discard first row
+    
+    D1 = torch.roll(D0,-1)
+    D2 = torch.roll(D0, 1)
 
     z1_M = Z[:-1, :]
     z2_M = Z[1:, :]
@@ -212,103 +191,109 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     maskD1 = (D1 > Dlimit)
     maskD2 = (D2 > Dlimit)
     
-    # Flux-centered, Liu
+    # Flux-centered, Lu started here
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = ududx_up(M[0],N[0],H[1])
-    vdudy = vdudy_up(M[0],N[0],H[1])
+    ududx = 0#F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
+    vdudy = 0#F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
     
-    # phi = 1.0 - CC1 * min(np.abs(m0 / max(D0, MinWaterDepth)), np.sqrt(g * D0))
-    # M[1, ix, iy] = (phi * m0 + 0.5 * (1.0 - phi) * (m1 + m2)
-    #             - (CC3 * D0 * (h2_update - h1_update) + Pre_grad_x)
-    #             + dt * ( sustr + f_cor * (n0 + n2 + n3 + n4))
-    #             - CC1 * (MU2 - MU1)
-    #             - CC2 * (NU2 - NU1) )
+    Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
     # He&Lu Torch
     phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
-    M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2) 
-            - CC1 * (MU2 - MU1)
-            + dt  * ( sustr + f_cor * (n0 + n2 + n3 + n4))
-            - CC1 * ududx
-            - CC2 * vdudy
-            - (dt*g/dx)* D0*(h2u_M - h1u_M) )
+    M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
+            + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
+            - CC1 * ududx                                  #u advection
+            - CC2 * vdudy                                  #v advection
+            - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x)         #pgf
+    
+    #pcolor(rho2u(X),rho2u(Y),M_val/D_M);colorbar();show()
     
     mask_fs999_M = (flux_sign_M == 999)
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
 
     # 底摩擦
-    friction_mask = (D0 > FrictionDepthLimit)
-    Cf = manning
-    MM = m0**2
-    NN = torch.zeros_like(m0)
-    Fx = g * Cf**2 / (D0**2.33 + 1e-9) * torch.sqrt(MM + NN) * m0
-    Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
-    M_val = M_val - torch.where(friction_mask, dt*Fx, torch.zeros_like(Fx))
+    # friction_mask = (D0 > FrictionDepthLimit)
+    # MM = m0**2
+    # NN = torch.zeros_like(m0)
+    # Fx = g * Cf**2 / (D0**2.33 + 1e-9) * torch.sqrt(MM + NN) * m0
+    # Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
+    # M_val = M_val - torch.where(friction_mask, dt*Fx, torch.zeros_like(Fx))
 
     M_new = M.clone()
-    M_new[1] = M_val
+    M_new[1,1:-1,1:-1] = M_val[1:-1,1:-1]
 
     # ========== N 分量 (Nx, Ny-1) ==========
     n0 = N[0]
     Nx_n, Ny_n = n0.shape
     D0N = D_N
-
-    n1 = torch.zeros_like(n0)
-    n2 = torch.zeros_like(n0)
-    if Ny_n > 1:
-        n1[:, 1:] = n0[:, :-1]
-        n2[:, :-1] = n0[:, 1:]
-
-    D1N = torch.zeros_like(D0N)
-    D2N = torch.zeros_like(D0N)
-    if Ny_n > 1:
-        D1N[:, 1:] = D0N[:, :-1]
-        D2N[:, :-1] = D0N[:, 1:]
-
+    
+    # 构造n1 (i.e., n_j+1), n2 (n_j-1) ##?????TODO check!
+    n1 = torch.roll(n0, 1, dims=0) #roll right
+    n2 = torch.roll(n0,-1, dims=0) #roll left
+    
+    D1N = torch.roll(D0N, 1, dims=0) #roll right
+    D2N = torch.roll(D0N,-1, dims=0) #roll left
+    
     z1_N = Z[:, :-1]
     z2_N = Z[:, 1:]
     h1_N = H[1, :, :-1]
     h2_N = H[1, :, 1:]
-    flux_sign_N, h1u_N, h2u_N = check_flux_direction_torch(z1_N, z2_N, h1_N, h2_N, dry_limit)
+    flux_sign_N, h1u_N, h2u_N = check_flux_direction_torch(z1_N, z2_N, h1_N, h2_N, params.dry_limit)
 
     cond_n0pos = (n0 >= 0)
     maskD0N = (D0N > Dlimit)
     maskD1N = (D1N > Dlimit)
     maskD2N = (D2N > Dlimit)
 
-    NV1 = torch.zeros_like(n0)
-    NV2 = torch.zeros_like(n0)
-    NV1 = torch.where(cond_n0pos & maskD1N, n1**2 / D1N, NV1)
-    NV2 = torch.where(cond_n0pos & maskD0N, n0**2 / D0N, NV2)
-    NV1 = torch.where(~cond_n0pos & maskD0N, n0**2 / D0N, NV1)
-    NV2 = torch.where(~cond_n0pos & maskD2N, n2**2 / D2N, NV2)
-
-    # Flux-centered, Liu
+    #Lu
     dPdy = ddy(Pa,'inner')
-    Pre_grad_y = CC2 * D0 * dPdy / rho_water
-                
+    Pre_grad_y = CC2 * D0N * dPdy / rho_water
+    
+    udvdx = torch.zeros_like(n0) ###TODO not finished
+    vdvdy = torch.zeros_like(n0)
+    
+    Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
     N_val = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
-            - (CC4 * D0 * (h2_update - h1_update) + Pre_grad_y)
-            + dt * (svstr - f_cor*(m0 + m1 + m4 + m5) )
-            - CC2 * (NV2 - NV1)
-            - CC1 * (MV2 - MV1))
-
+            + dt * (svstr - f_cor * Mv )
+            - CC1 * udvdx
+            - CC2 * vdvdy
+            - (CC4 * D0N * (h1u_N - h2u_N) + Pre_grad_y))
+    #pcolor(rho2v(X),rho2v(Y),N_val/D_N);colorbar();show()
+    
     mask_fs999_N = (flux_sign_N == 999)
     N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
 
-    friction_maskN = (D0N > FrictionDepthLimit)
-    MM_N = torch.zeros_like(n0)
-    NN_N = n0**2
-    Fy = g * Cf**2 / (D0N**2.33 + 1e-9) * torch.sqrt(MM_N + NN_N) * n0
-    Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
-    N_val = N_val - torch.where(friction_maskN, dt*Fy, torch.zeros_like(Fy))
+    # friction_maskN = (D0N > FrictionDepthLimit)
+    # MM_N = torch.zeros_like(n0)
+    # NN_N = n0**2
+    # Fy = g * Cf**2 / (D0N**2.33 + 1e-9) * torch.sqrt(MM_N + NN_N) * n0
+    # Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
+    # N_val = N_val - torch.where(friction_maskN, dt*Fy, torch.zeros_like(Fy))
 
     N_new = N.clone()
-    N_new[1] = N_val
+    N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
+    
+    # apply boundary condition
+    z_w = 0.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
+    z_s = 0
+    z_n = 0
+    z_e = 0
+    #M_update = bcond_u2D(H_update, Z, M, D_M, z_w, z_e, params)
+    #N_update = bcond_v2D(H_update, Z, N, D_N, z_s, z_n, params)
+    M_new[:,0,:]=0
+    M_new[:,-1,:]=0
+    M_new[:,:,0]=0
+    M_new[:,:,-1]=0
+    N_new[:,0,:]=0
+    N_new[:,-1,:]=0
+    N_new[:,:,0]=0
+    N_new[:,:,-1]=0
+    #N_new[0,:]=0
+    #N_new[0,:]=0
 
-    return M_new, N_new,Fx,Fy
+    return M_new, N_new
     
 def reconstruct_flow_depth_torch(H, Z, M, N, params):
     dry_limit = params.dry_limit
@@ -738,63 +723,14 @@ if __name__ == '__main__':
     M = torch.zeros((2, params.Nx, params.Ny+1))
     N = torch.zeros((2, params.Nx+1, params.Ny))
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
-    Sign_M = torch.zeros((params.Nx, params.Ny+1))
-    Sign_N = torch.zeros((params.Nx+1, params.Ny))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    Wx = np.zeros((params.NT, x.shape[0], y.shape[0]))
-    Wy = np.zeros((params.NT, x.shape[0], y.shape[0]))
+    H[0] = 1 * torch.exp(-((X-400000)**2 + (Y-200000)**2) / (2 * 5000.0**2))
     
-    for itime in range(params.NT):
-        typhoon_Pos = [200*1e3 + itime*params.dt*params.typhoon_Vec[0], 
-                      200*1e3 + itime*params.dt*params.typhoon_Vec[1]]
-        Wx[itime], Wy[itime] = WindProfile(params.Wr, params.rMax, typhoon_Pos, params.typhoon_Vec, X, Y)
+    Wx = torch.ones((x.shape[0], y.shape[0]))*0
+    Wy = torch.ones((x.shape[0], y.shape[0]))*0
+    Pa = Wx * 0 + 1000
     
-    Wx = torch.from_numpy(Wx)
-    Wy = torch.from_numpy(Wy)
-    
-    Pa = 1000 + Wx*0
-    Ws = windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)
-    sustr = params.rho_air / params.rho_water * params.Cd * windSpeed * Wx
-    svstr = params.rho_air / params.rho_water * params.Cd * windSpeed * Wy
-    #
-    # sustr = np.concatenate((sustr[:,:,0:1], sustr), 2)
-    # svstr = np.concatenate((svstr[:,0:1,:], svstr), 1)
-    # #sustr = np.concatenate((sustr[:,0:1,:], sustr), 1)
-    # #svstr = np.concatenate((svstr[:,:,0:1], svstr), 2)
-    # # lon_u = np.vstack([X[0, :] - 0.5 * (X[1, :] - X[0, :]), 0.5 * (X[:-1, :] + X[1:, :]), X[-1, :] + 0.5 * (X[-1, :] - X[-2, :])])
-    # # lat_u = np.vstack([Y[0, :] - 0.5 * (Y[1, :] - Y[0, :]), 0.5 * (Y[:-1, :] + Y[1:, :]), Y[-1, :] + 0.5 * (Y[-1, :] - Y[-2, :])])
-    # # lon_v = np.hstack([X[:, 0:1] - 0.5 * (X[:, 1:2] - X[:, 0:1]), 0.5 * (X[:, :-1] + X[:, 1:]), X[:, -1:] + 0.5 * (X[:, -1:] - X[:, -2:-1])])
-    # # lat_v = np.hstack([Y[:, 0:1] - 0.5 * (Y[:, 1:2] - Y[:, 0:1]), 0.5 * (Y[:, :-1] + Y[:, 1:]), Y[:, -1:] + 0.5 * (Y[:, -1:] - Y[:, -2:-1])])
-    # lon_u = np.hstack([X[:, 0:1] - 0.5 * (X[:, 1:2] - X[:, 0:1]), 0.5 * (X[:, :-1] + X[:, 1:]), X[:, -1:] + 0.5 * (X[:, -1:] - X[:, -2:-1])])
-    # lat_u = np.hstack([Y[:, 0:1] - 0.5 * (Y[:, 1:2] - Y[:, 0:1]), 0.5 * (Y[:, :-1] + Y[:, 1:]), Y[:, -1:] + 0.5 * (Y[:, -1:] - Y[:, -2:-1])])
-    # lon_v = np.vstack([X[0, :] - 0.5 * (X[1, :] - X[0, :]), 0.5 * (X[:-1, :] + X[1:, :]), X[-1, :] + 0.5 * (X[-1, :] - X[-2, :])])
-    # lat_v = np.vstack([Y[0, :] - 0.5 * (Y[1, :] - Y[0, :]), 0.5 * (Y[:-1, :] + Y[1:, :]), Y[-1, :] + 0.5 * (Y[-1, :] - Y[-2, :])])
-    # time = (  np.arange(0, (NT)*dt,dt, dtype=np.float64) )/86400.
-    # ds_out = xr.Dataset(
-    #         {'sustr': (['sms_time','lat_u', 'lon_u'], sustr.swapaxes(1,2)*1e3),  #for ROMS
-    #          'svstr': (['sms_time','lat_v', 'lon_v'], svstr.swapaxes(1,2)*1e3),
-    #          'lon_u': (['lat_u','lon_u'], lon_u.transpose()),
-    #          'lat_u': (['lat_u','lon_u'], lat_u.transpose()),
-    #          'lon_v': (['lat_v','lon_v'], lon_v.transpose()),
-    #          'lat_v': (['lat_v','lon_v'], lat_v.transpose())},
-    #         coords={
-    #             'sms_time': time}   )
-    # #写入字段
-    # ds_out['sustr'].attrs['long_name'] = "sustr"
-    # ds_out['sustr'].attrs['units'] = "N m-2"
-    # ds_out['sustr'].attrs['coordinates'] = "lat_u lon_u"
-    # ds_out['sustr'].attrs['time'] = "sms_time"
-    # ds_out['svstr'].attrs['long_name'] = "svstr"
-    # ds_out['svstr'].attrs['units'] = "N m-2"
-    # ds_out['svstr'].attrs['coordinates'] = "lat_v lon_v"
-    # ds_out['svstr'].attrs['time'] = "sms_time" 
-    
-    # ds_out['sms_time'].attrs['units'] = "days since 0001-01-01 00:00:00"
-    
-    # ds_out.to_netcdf('WindStrMove'+str(Wr)+str(int(rMax/1000))+'.nc')
-
-    #pcolor(X,Y,(Wx**2+Wy**2)**0.5);colorbar()
     eta_list = list()
     u_list = list()
     v_list = list()
@@ -804,21 +740,18 @@ if __name__ == '__main__':
         print(f"nt = {itime} / {params.NT}")
         H_update = mass_cartesian_torch(H, Z, M, N, params)
         
-        ududx = ududx_up(M[1],N[1],H[1])
-        M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[itime], Wy[itime], Pa[itime]*0, params)
+        M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx, Wy, Pa, params)
 
-        H = H_update.copy()
-        M = M_update.copy()
-        N = N_update.copy()
-        H[0, :, :] = H[1, :, :]
-        M[0, :, :] = M[1, :, :]
-        N[0, :, :] = N[1, :, :]
-        eta_list.append(H_update[1, :])
-        u_list.append(M_update[1, :])
-        v_list.append(N_update[1, :])
+        H[0] = H_update[1]
+        M[0] = M_update[1]
+        N[0] = N_update[1]
+        eta_list.append(dd(H_update[1]))
+        u_list.append(dd(M_update[1]))
+        v_list.append(dd(N_update[1]))
         
         pcolor(X, Y, eta_list[-1], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
         colorbar()
+        #quiver(X[:-1,:-1],Y[:-1,:-1],rho2v(M_update[1]),rho2u(N_update[1]), scale=10)
         xlabel("x [m]", fontname="serif", fontsize=12)
         ylabel("y [m]", fontname="serif", fontsize=12)
         title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
