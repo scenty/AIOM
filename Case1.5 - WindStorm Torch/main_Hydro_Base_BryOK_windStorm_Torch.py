@@ -8,7 +8,7 @@ from matplotlib.pyplot import *
 import xarray as xr
 import torch
 import torch.nn.functional as F
-from tools import ddx,ddy,rho2u,rho2v
+from tools import ddx,ddy,rho2u,rho2v,ududx_up
 
 class Params:
     def __init__(self):
@@ -84,7 +84,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dMdx = ddx(M0)
     dNdy = ddy(N0)
     
-    H1  = H0 - CC1 * dMdx - CC2 * dNdy
+    H1[1:-1,1:-1]  = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
     
     # 整段不用，旧的代码
     # 构造 m_right, m_left
@@ -174,6 +174,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     Nx = params.Nx
     Ny = params.Ny
     
+    ududx = ududx_up(M,N,H)
+    
     # 重构流深
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
     # get forcing
@@ -220,6 +222,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     # Flux-centered, Liu
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
+    
+    ududx = ududx_up(M,N,H)
     
     phi = 1.0 - CC1 * min(np.abs(m0 / max(D0, MinWaterDepth)), np.sqrt(g * D0))
     M[1, ix, iy] = (phi * m0 + 0.5 * (1.0 - phi) * (m1 + m2)
@@ -807,6 +811,8 @@ if __name__ == '__main__':
     for itime in range(params.NT):
         print(f"nt = {itime} / {params.NT}")
         H_update = mass_cartesian_torch(H, Z, M, N, params)
+        
+        ududx = ududx_up(M[1],N[1],H[1])
         M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[itime], Wy[itime], Pa[itime]*0, params)
 
         H = H_update.copy()
