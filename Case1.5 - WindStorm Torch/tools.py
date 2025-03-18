@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import time
 
 def ddx(Y, scheme='edge'):
     #1st order difference along first dimension
@@ -9,7 +10,7 @@ def ddx(Y, scheme='edge'):
         pad = 1
     elif scheme=='inner':
         pad = 0
-    
+    # torch.roll
     kernel = torch.tensor([-1,1], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) 
     
     dMdx = torch.stack([
@@ -33,42 +34,67 @@ def ddy(Y, scheme='edge'):
         for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
     return dNdy
 
+# def rho2u(Y):
+#     #from rho-point to u-point (-1 at first dimension)
+#     # - Y: 2D tensor
+#     #start = time.time()
+#     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
+#     H_u = torch.stack([
+#         F.conv1d(Y[:, i].unsqueeze(0).unsqueeze(0), kernel, padding=0)
+#         for i in range(Y.size(1)) ], dim=2).squeeze().t()
+#     #print(f'{time.time() - start}')
+#     return H_u
+# def rho2v(Y):
+#     #from rho-point to v-point (-1 at second dimension)
+#     # - Y: 2D tensor
+#     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
+#     H_v = torch.stack([ 
+#         F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)
+#         for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
+#     return H_v
+# def u2rho(Y):
+#     #from u-point to rho-point (-1 at first dimension)
+#     # - Y: 2D tensor
+#     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
+#     Yr = torch.stack([
+#         F.conv1d(Y[:, i].unsqueeze(0).unsqueeze(0), kernel, padding=0)
+#         for i in range(Y.size(1)) ], dim=2).squeeze().t()
+#     return Yr
+
+# def v2rho(Y):
+#     #from v-point to rho-point (-1 at second dimension)
+#     # - Y: 2D tensor
+#     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
+#     Yr = torch.stack([ 
+#         F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)
+#         for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
+#     return Yr
 
 def rho2u(Y):
     #from rho-point to u-point (-1 at first dimension)
     # - Y: 2D tensor
-    kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
-    H_u = torch.stack([
-        F.conv1d(Y[:, i].unsqueeze(0).unsqueeze(0), kernel, padding=0)
-        for i in range(Y.size(1)) ], dim=2).squeeze().t()
-    return H_u
+    #start = time.time()
+    #print(f'{time.time() - start :.9f}')
+    return (torch.roll(Y,1,0) + Y)[1:]/2
 
 def rho2v(Y):
-    #from rho-point to v-point (-1 at second dimension)
+    #from rho-point to u-point (-1 at first dimension)
     # - Y: 2D tensor
-    kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
-    H_v = torch.stack([ 
-        F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)
-        for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
-    return H_v
+    #start = time.time()
+    #print(f'{time.time() - start :.9f}')
+    return (torch.roll(Y,1,1) + Y)[:,1:]/2
 
 def u2rho(Y):
     #from u-point to rho-point (-1 at first dimension)
     # - Y: 2D tensor
-    kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
-    Yr = torch.stack([
-        F.conv1d(Y[:, i].unsqueeze(0).unsqueeze(0), kernel, padding=0)
-        for i in range(Y.size(1)) ], dim=2).squeeze().t()
-    return Yr
+    return (torch.roll(Y,1,0) + Y)[1:]/2
 
 def v2rho(Y):
     #from v-point to rho-point (-1 at second dimension)
     # - Y: 2D tensor
-    kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
-    Yr = torch.stack([ 
-        F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)
-        for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
-    return Yr
+    return (torch.roll(Y,1,1) + Y)[:,1:]/2
+
+
 
 def ududx_up(M,N,H):
     # Upwind advection
@@ -100,9 +126,9 @@ def vdudy_up(M,N,H):
     #[1 ~ Nx  , 1 ~ Ny  ] for rho
     #[1 ~ Nx-2, 1 ~ Ny-1] for u 
     #[1 ~ Nx-1, 1 ~ Ny-2] for v
-    M = torch.randn([100,51])
-    N = torch.randn([101,50])
-    H = torch.randn([101,51])
+    # M = torch.randn([100,51])
+    # N = torch.randn([101,50])
+    # H = torch.randn([101,51])
     Nu = rho2u(v2rho(N)) #at u-point, [ 0 ~ Nx, 1 ~ Ny-1]
     L12 = torch.sign(Nu + 1e-12) # same with Nu
     L11 = 1 - L12                #

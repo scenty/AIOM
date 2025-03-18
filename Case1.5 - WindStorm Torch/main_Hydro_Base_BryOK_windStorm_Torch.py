@@ -8,7 +8,8 @@ from matplotlib.pyplot import *
 import xarray as xr
 import torch
 import torch.nn.functional as F
-from tools import ddx,ddy,rho2u,rho2v,ududx_up
+from tools import ddx,ddy,rho2u,rho2v
+from tools import ududx_up,vdudy_up
 
 class Params:
     def __init__(self):
@@ -211,32 +212,27 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     maskD0 = (D0 > Dlimit)
     maskD1 = (D1 > Dlimit)
     maskD2 = (D2 > Dlimit)
-
-    MU1 = torch.zeros_like(m0)
-    MU2 = torch.zeros_like(m0)
-    MU1 = torch.where(cond_m0pos & maskD1, m1**2 / D1, MU1)
-    MU2 = torch.where(cond_m0pos & maskD0,  m0**2 / D0, MU2)
-    MU1 = torch.where(~cond_m0pos & maskD0, m0**2 / D0, MU1)
-    MU2 = torch.where(~cond_m0pos & maskD2, m2**2 / D2, MU2)
     
     # Flux-centered, Liu
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
     ududx = ududx_up(M,N,H)
+    vdudy = vdudy_up(M,N,H)
     
-    phi = 1.0 - CC1 * min(np.abs(m0 / max(D0, MinWaterDepth)), np.sqrt(g * D0))
-    M[1, ix, iy] = (phi * m0 + 0.5 * (1.0 - phi) * (m1 + m2)
-                - (CC3 * D0 * (h2_update - h1_update) + Pre_grad_x)
-                + dt * ( sustr + f_cor * (n0 + n2 + n3 + n4))
-                - CC1 * (MU2 - MU1)
-                - CC2 * (NU2 - NU1) )
-    # TODO !!! He, Torch
+    # phi = 1.0 - CC1 * min(np.abs(m0 / max(D0, MinWaterDepth)), np.sqrt(g * D0))
+    # M[1, ix, iy] = (phi * m0 + 0.5 * (1.0 - phi) * (m1 + m2)
+    #             - (CC3 * D0 * (h2_update - h1_update) + Pre_grad_x)
+    #             + dt * ( sustr + f_cor * (n0 + n2 + n3 + n4))
+    #             - CC1 * (MU2 - MU1)
+    #             - CC2 * (NU2 - NU1) )
+    # He&Lu Torch
     phi_M = 1.0 - (dt/dx)*torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
     M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2) 
             - (dt/dx)* (MU2 - MU1)
             + dt * ( sustr + f_cor * (n0 + n2 + n3 + n4))
-            - (dt/dy)* (NU2 - NU1) 
+            - CC1 * ududx
+            - CC2 * vdudy
             - (dt*g/dx)* D0*(h2u_M - h1u_M) )
     
     mask_fs999_M = (flux_sign_M == 999)
