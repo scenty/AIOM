@@ -9,15 +9,15 @@ import xarray as xr
 import torch
 import torch.nn.functional as F
 from tools import ddx,ddy,rho2u,rho2v,dd
-from tools import ududx_up,vdudy_up
+from tools import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
 class Params:
     def __init__(self):
         # Domain parameters
-        self.Lx = 800*1e3
-        self.Ly = 400*1e3
-        self.Nx = 100
-        self.Ny = 50
+        self.Lx = 800
+        self.Ly = 400
+        self.Nx = 200
+        self.Ny = 100
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
         self.depth = 10.0
@@ -31,10 +31,11 @@ class Params:
         self.dry_limit = 20
         self.MinWaterDepth = 0.01
         self.FrictionDepthLimit = 5e-3
+        self.f_cor = 1e-5
         
         # Time parameters
-        self.dt = 20
-        self.NT = 1000
+        self.dt = 2
+        self.NT = 100
         self.centerWeighting0 = 0.9998
         
         # Boundary conditions
@@ -90,32 +91,33 @@ def mass_cartesian_torch(H, Z, M, N, params):
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
-    # mask_deep = (Z <= -dry_limit)
-    # H1 = torch.where(mask_deep, torch.zeros_like(H1), H1)
+    mask_deep = (Z <= -dry_limit)
+    H1 = torch.where(mask_deep, torch.zeros_like(H1), H1)
 
-    # ZH0 = Z + H0
-    # ZH1 = Z + H1
-    # cond = (Z < dry_limit) & (Z > -dry_limit)
+    ZH0 = Z + H0
+    ZH1 = Z + H1
+    cond = (Z < dry_limit) & (Z > -dry_limit)
 
-    # wet_to_dry = cond & (ZH0>0) & ((H1-H0)<0) & (ZH1<=MinWaterDepth)
-    # c1 = wet_to_dry & (Z>0)
-    # c2 = wet_to_dry & (Z<=0)
-    # H1 = torch.where(c1, -Z, H1)
-    # H1 = torch.where(c2, torch.zeros_like(H1), H1)
+    wet_to_dry = cond & (ZH0>0) & ((H1-H0)<0) & (ZH1<=MinWaterDepth)
+    c1 = wet_to_dry & (Z>0)
+    c2 = wet_to_dry & (Z<=0)
+    H1 = torch.where(c1, -Z, H1)
+    H1 = torch.where(c2, torch.zeros_like(H1), H1)
 
-    # cond_dry = cond & (ZH0<=0)
-    # c3 = cond_dry & ((H1-H0)>0)
-    # H1 = torch.where(c3, H1 - H0 - Z, H1)
-    # c4 = cond_dry & ((H1-H0)<=0) & (Z>0)
-    # c5 = cond_dry & ((H1-H0)<=0) & (Z<=0)
-    # H1 = torch.where(c4, -Z, H1)
-    # H1 = torch.where(c5, torch.zeros_like(H1), H1)
-    
-    #TODO
-    
+    cond_dry = cond & (ZH0<=0)
+    c3 = cond_dry & ((H1-H0)>0)
+    H1 = torch.where(c3, H1 - H0 - Z, H1)
+    c4 = cond_dry & ((H1-H0)<=0) & (Z>0)
+    c5 = cond_dry & ((H1-H0)<=0) & (Z<=0)
+    H1 = torch.where(c4, -Z, H1)
+    H1 = torch.where(c5, torch.zeros_like(H1), H1)
+       
     # 构造新的 H，不再对 H.clone() 进行切片赋值，而是用 stack 构造新张量
     H_new = torch.stack((H0, H1), dim=0)
     H_new = bcond_zeta(H_new, Z, params)
+    
+    #TODO boundary tide
+    H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
     return H_new
 
 def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
@@ -177,8 +179,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     m1 = torch.roll(m0,-1, dims=0) #roll down, and discard last row
     m2 = torch.roll(m0, 1, dims=0) #roll up, and discard first row
     
-    D1 = torch.roll(D0,-1)
-    D2 = torch.roll(D0, 1)
+    D1 = torch.roll(D0,-1, dims=0)
+    D2 = torch.roll(D0, 1, dims=0)
 
     z1_M = Z[:-1, :]
     z2_M = Z[1:, :]
@@ -195,8 +197,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = 0#F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
-    vdudy = 0#F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
+    ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
+    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
     
     Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
     # He&Lu Torch
@@ -250,8 +252,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdy = ddy(Pa,'inner')
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
-    udvdx = torch.zeros_like(n0) ###TODO not finished
-    vdvdy = torch.zeros_like(n0)
+    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
+    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
     
     Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
@@ -725,7 +727,7 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-400000)**2 + (Y-200000)**2) / (2 * 5000.0**2))
+    H[0] = 1 * torch.exp(-((X-400)**2 + (Y-200)**2) / (2 * 5.0**2))
     
     Wx = torch.ones((x.shape[0], y.shape[0]))*0
     Wy = torch.ones((x.shape[0], y.shape[0]))*0
@@ -738,6 +740,7 @@ if __name__ == '__main__':
     
     for itime in range(params.NT):
         print(f"nt = {itime} / {params.NT}")
+        params.itime=itime
         H_update = mass_cartesian_torch(H, Z, M, N, params)
         
         M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx, Wy, Pa, params)
