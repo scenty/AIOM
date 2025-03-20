@@ -15,9 +15,9 @@ class Params:
     def __init__(self):
         # Domain parameters
         self.Lx = 800*1e3
-        self.Ly = 400*1e3
+        self.Ly = 800*1e3
         self.Nx = 100
-        self.Ny = 50
+        self.Ny = 100
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
         self.depth = 50.0
@@ -27,7 +27,7 @@ class Params:
         self.rho_water = 1025.0
         self.rho_air = 1.2
         self.Cd = 2.5e-3
-        self.manning = 0.0
+        self.manning = 0.003
         self.dry_limit = 20
         self.MinWaterDepth = 0.01
         self.FrictionDepthLimit = 5e-3
@@ -732,7 +732,7 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-400000)**2 + (Y-200000)**2) / (2 * 50000**2))
+    H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
     #
     #Wx,Wy,Pa = generate_wind(X,Y,params)
     #Ws = torch.sqrt(Wx**2 + Wy**2)
@@ -763,9 +763,11 @@ if __name__ == '__main__':
         u_list.append(dd(M_update[1]))
         v_list.append(dd(N_update[1]))
         
+        mag = np.sqrt( rho2v(M_update[1])**2+rho2u(N_update[1])**2)
         pcolor(X, Y, eta_list[-1], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
         colorbar()
         #quiver(X[:-1,:-1],Y[:-1,:-1],rho2v(M_update[1]),rho2u(N_update[1]), scale=10)
+        contour(X[:-1,:-1],Y[:-1,:-1],mag)
         xlabel("x [m]", fontname="serif", fontsize=12)
         ylabel("y [m]", fontname="serif", fontsize=12)
         title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
