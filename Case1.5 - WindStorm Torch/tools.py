@@ -150,9 +150,9 @@ def vdudy_up(M,N,H):
     Hu = rho2u(H) #H at u-point 1/2, 3/2, 5/2, 0 ~ Nx, total of Nx
     
     # M all at i + 1/2 
-    t1 = L21[:,1:-1] * M[:, 2:  ] * Nu[:,2:]   / Hu[:,:-2]   # [Nx - 1, Ny - 2]
+    t1 = L21[:,1:-1] * M[:, 2:  ] * Nu[:,2:  ] / Hu[:,2:  ]   # [Nx - 1, Ny - 2]
     t2 = L22[:,1:-1] * M[:, 1:-1] * Nu[:,1:-1] / Hu[:,1:-1]   # 
-    t3 = L23[:,1:-1] * M[:, :-2]  * Nu[:,:-2]  / Hu[:,2:]
+    t3 = L23[:,1:-1] * M[:,  :-2] * Nu[:, :-2] / Hu[:, :-2]
     
     vdudy = t1 + t2 + t3
            
@@ -178,9 +178,9 @@ def udvdx_up(M,N,H):
     L33 = -L32 - L31            # 0 ~ Nx-1, total of Nx
     assert torch.all(L31+L32+L33 == 0) and torch.all(L31 < 2)
     
-    t1 = L31[1:-1] * Mv[2:  ] * N[1:-1]/Hv[:-2]   # Nx-1, Ny
+    t1 = L31[1:-1] * Mv[2:  ] * N[2:  ]/Hv[2:  ]   # Nx-1, Ny
     t2 = L32[1:-1] * Mv[1:-1] * N[1:-1]/Hv[1:-1]  # Nx-1, Ny
-    t3 = L33[1:-1] * Mv[ :-2] * N[1:-1]/Hv[2:]    # Nx-1, Ny
+    t3 = L33[1:-1] * Mv[ :-2] * N[ :-2]/Hv[ :-2]    # Nx-1, Ny
     
     udvdx = t1 + t2 + t3
            

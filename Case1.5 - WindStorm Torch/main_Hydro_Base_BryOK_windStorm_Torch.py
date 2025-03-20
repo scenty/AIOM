@@ -14,8 +14,8 @@ from tools import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 class Params:
     def __init__(self):
         # Domain parameters
-        self.Lx = 80000
-        self.Ly = 40000
+        self.Lx = 800*1e3
+        self.Ly = 400*1e3
         self.Nx = 100
         self.Ny = 50
         self.dx = self.Lx / self.Nx
@@ -210,8 +210,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
             - CC2 * vdudy                                  #v advection
             - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x)         #pgf
     
-    pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
-    pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
+    #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
+    #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
     
     mask_fs999_M = (flux_sign_M == 999)
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
@@ -277,7 +277,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
 
     N_new = N.clone()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
-    pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
+    #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
     # apply boundary condition
     z_w = 0 #.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
@@ -732,12 +732,12 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-400)**2 + (Y-400)**2) / (2 * 5.0**2))
+    H[0] = 1 * torch.exp(-((X-400000)**2 + (Y-200000)**2) / (2 * 50000**2))
     #
     #Wx,Wy,Pa = generate_wind(X,Y,params)
     #Ws = torch.sqrt(Wx**2 + Wy**2)
     #
-    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0 + 10
+    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0
     Wy = np.ones((NT,X.shape[0],X.shape[1]))*0
     
     Wx = torch.from_numpy(Wx)
