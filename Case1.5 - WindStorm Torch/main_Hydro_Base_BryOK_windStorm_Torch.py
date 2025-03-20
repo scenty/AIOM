@@ -14,13 +14,13 @@ from tools import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 class Params:
     def __init__(self):
         # Domain parameters
-        self.Lx = 800
-        self.Ly = 400
-        self.Nx = 200
-        self.Ny = 100
+        self.Lx = 80000
+        self.Ly = 40000
+        self.Nx = 100
+        self.Ny = 50
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
-        self.depth = 10.0
+        self.depth = 50.0
         
         # Physical constants
         self.g = 9.8
@@ -34,14 +34,14 @@ class Params:
         self.f_cor = 1e-5
         
         # Time parameters
-        self.dt = 2
-        self.NT = 100
+        self.dt = 10
+        self.NT = 1000
         self.centerWeighting0 = 0.9998
         
         # Boundary conditions
-        self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
-        self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo'] 
-        self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
+        self.obc_ele = ['Gra', 'Gra', 'Gra', 'Gra']
+        self.obc_u2d = ['Gra', 'Gra', 'Gra', 'Gra'] 
+        self.obc_v2d = ['Gra', 'Gra', 'Gra', 'Gra']
         
         # Temporary variables
         self.CC1 = self.dt / self.dx
@@ -116,8 +116,9 @@ def mass_cartesian_torch(H, Z, M, N, params):
     H_new = torch.stack((H0, H1), dim=0)
     H_new = bcond_zeta(H_new, Z, params)
     
+    assert not torch.any(torch.isnan(H_new))
     #TODO boundary tide
-    H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
+    #H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
     return H_new
 
 def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
@@ -209,7 +210,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
             - CC2 * vdudy                                  #v advection
             - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x)         #pgf
     
-    #pcolor(rho2u(X),rho2u(Y),M_val/D_M);colorbar();show()
+    pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
+    pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
     
     mask_fs999_M = (flux_sign_M == 999)
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
@@ -262,8 +264,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
             - CC1 * udvdx
             - CC2 * vdvdy
             - (CC4 * D0N * (h1u_N - h2u_N) + Pre_grad_y))
-    #pcolor(rho2v(X),rho2v(Y),N_val/D_N);colorbar();show()
-    
+      
     mask_fs999_N = (flux_sign_N == 999)
     N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
 
@@ -276,25 +277,28 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
 
     N_new = N.clone()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
+    pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
     # apply boundary condition
-    z_w = 0.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
+    z_w = 0 #.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
     z_s = 0
     z_n = 0
     z_e = 0
-    #M_update = bcond_u2D(H_update, Z, M, D_M, z_w, z_e, params)
-    #N_update = bcond_v2D(H_update, Z, N, D_N, z_s, z_n, params)
-    M_new[:,0,:]=0
-    M_new[:,-1,:]=0
-    M_new[:,:,0]=0
-    M_new[:,:,-1]=0
-    N_new[:,0,:]=0
-    N_new[:,-1,:]=0
-    N_new[:,:,0]=0
-    N_new[:,:,-1]=0
+    M_update = bcond_u2D(H_update, Z, M, D_M, z_w, z_e, params)
+    N_update = bcond_v2D(H_update, Z, N, D_N, z_s, z_n, params)
+    # M_new[:,0,:]=0
+    # M_new[:,-1,:]=0
+    # M_new[:,:,0]=0
+    # M_new[:,:,-1]=0
+    # N_new[:,0,:]=0
+    # N_new[:,-1,:]=0
+    # N_new[:,:,0]=0
+    # N_new[:,:,-1]=0
     #N_new[0,:]=0
     #N_new[0,:]=0
-
+    assert not torch.any(torch.isnan(M_new))
+    assert not torch.any(torch.isnan(N_new))
+    
     return M_new, N_new
     
 def reconstruct_flow_depth_torch(H, Z, M, N, params):
@@ -717,6 +721,7 @@ if __name__ == '__main__':
     device = torch.device('cpu')
     
     dt = params.dt
+    NT = params.NT
     
     x = torch.linspace(0, params.Lx, params.Nx + 1)
     y = torch.linspace(0, params.Ly, params.Ny + 1)
@@ -727,10 +732,16 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-400)**2 + (Y-200)**2) / (2 * 5.0**2))
+    H[0] = 1 * torch.exp(-((X-400)**2 + (Y-400)**2) / (2 * 5.0**2))
+    #
+    #Wx,Wy,Pa = generate_wind(X,Y,params)
+    #Ws = torch.sqrt(Wx**2 + Wy**2)
+    #
+    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0 + 10
+    Wy = np.ones((NT,X.shape[0],X.shape[1]))*0
     
-    Wx = torch.ones((x.shape[0], y.shape[0]))*0
-    Wy = torch.ones((x.shape[0], y.shape[0]))*0
+    Wx = torch.from_numpy(Wx)
+    Wy = torch.from_numpy(Wy)
     Pa = Wx * 0 + 1000
     
     eta_list = list()
@@ -743,7 +754,7 @@ if __name__ == '__main__':
         params.itime=itime
         H_update = mass_cartesian_torch(H, Z, M, N, params)
         
-        M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx, Wy, Pa, params)
+        M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[itime], Wy[itime], Pa[itime], params)
 
         H[0] = H_update[1]
         M[0] = M_update[1]
@@ -790,8 +801,8 @@ if __name__ == '__main__':
         vbar = v_list[ind2plot]
         pcolor(X, Y, eta_list[ind2plot], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
         colorbar()
+        quiver(X[::3,::3],Y[::3,::3],ubar[::3,::3],vbar[::3,::3], scale=70)
         #quiver(X[::3,::3],Y[::3,::3],(Wx/Ws)[ind2plot,::3,::3],(Wy/Ws)[ind2plot,::3,::3], scale=70)
-        quiver(X[::3,::3],Y[::3,::3],(Wx/Ws)[ind2plot,::3,::3],(Wy/Ws)[ind2plot,::3,::3], scale=70)
         axis('equal')
         savefig("ele_Rad" + f"{itime*dt}" + "s.jpg", format='jpg', dpi=300, bbox_inches='tight')
         #show()

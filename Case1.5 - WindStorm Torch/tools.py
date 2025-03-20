@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import time
 import numpy as np
+from matplotlib.pyplot import pcolor,colorbar
 
 def dd(var): #detach and operations
     return var.detach().cpu().numpy().squeeze()
@@ -117,7 +118,7 @@ def ududx_up(M,N,H): #(16)
     L11 = (1 - L12)//2          # 0 ~ Nx-1, total of Nx
     L13 = -L12 - L11            # 0 ~ Nx-1, total of Nx
     assert torch.all(L11+L12+L13 == 0)
-    assert torch.all(L11 <2)
+    assert torch.all(L11 < 2)
     
     t1 = L11[1:-1] * M[2:]**2 /Hu[1:-1]   # Nx - 2
     t2 = L12[1:-1] * M[1:-1]**2/Hu[1:-1]  # 
@@ -140,15 +141,15 @@ def vdudy_up(M,N,H):
     N_exp = torch.cat( (N[:,0:1], N, N[:,-1:]), dim = 1)
     Nu = rho2u(v2rho(N_exp)) #at u-point, [ 0 ~ Nx, 1 ~ Ny-1]
     
+    #These 
     L22 = torch.sign(Nu + 1e-12) # same with Nu
     L21 = (1 - L22)//2           #
     L23 = -L22 - L21             #
-    assert torch.all(L21+L22+L23 == 0)
+    assert torch.all(L21+L22+L23 == 0) and torch.all(L21 < 2)
     
     Hu = rho2u(H) #H at u-point 1/2, 3/2, 5/2, 0 ~ Nx, total of Nx
     
     # M all at i + 1/2 
-    ## TODO
     t1 = L21[:,1:-1] * M[:, 2:  ] * Nu[:,2:]   / Hu[:,:-2]   # [Nx - 1, Ny - 2]
     t2 = L22[:,1:-1] * M[:, 1:-1] * Nu[:,1:-1] / Hu[:,1:-1]   # 
     t3 = L23[:,1:-1] * M[:, :-2]  * Nu[:,:-2]  / Hu[:,2:]
@@ -175,7 +176,7 @@ def udvdx_up(M,N,H):
     L32 = torch.sign(Mv + 1e-12) # 0 ~ Nx-1, total of Nx
     L31 = (1 - L32)//2          # 0 ~ Nx-1, total of Nx
     L33 = -L32 - L31            # 0 ~ Nx-1, total of Nx
-    assert torch.all(L31+L32+L33 == 0)
+    assert torch.all(L31+L32+L33 == 0) and torch.all(L31 < 2)
     
     t1 = L31[1:-1] * Mv[2:  ] * N[1:-1]/Hv[:-2]   # Nx-1, Ny
     t2 = L32[1:-1] * Mv[1:-1] * N[1:-1]/Hv[1:-1]  # Nx-1, Ny
@@ -198,7 +199,7 @@ def vdvdy_up(M,N,H): #done
     L42 = torch.sign(N + 1e-12)  # 
     L41 = (1 - L42)//2           #
     L43 = -L42 - L41             #
-    assert torch.all(L41+L42+L43 == 0)
+    assert torch.all(L41+L42+L43 == 0) and torch.all(L41 < 2)
     
     Hv = rho2v(H) #H at v-point 0 ~ Ny, total of Ny
     
