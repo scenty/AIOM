@@ -68,8 +68,8 @@ def generate_wind(X,Y,params,output = False):
                       200*1e3 + itime*params.dt*params.typhoon_Vec[1]]
         Wx[itime], Wy[itime] = WindProfile(params.Wr, params.rMax, typhoon_Pos, params.typhoon_Vec, X, Y)
     
-    Wx = torch.from_numpy(Wx)
-    Wy = torch.from_numpy(Wy)
+    Wx = torch.from_numpy(Wx).to(dtype=X.dtype, device=X.device)
+    Wy = torch.from_numpy(Wy).to(dtype=X.dtype, device=X.device)
     
     Pa = 1000 + Wx*0
     Ws = windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)

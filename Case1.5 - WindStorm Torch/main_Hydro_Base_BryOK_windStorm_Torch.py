@@ -14,10 +14,10 @@ from tools import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 class Params:
     def __init__(self):
         # Domain parameters
-        self.Lx = 80000
-        self.Ly = 40000
-        self.Nx = 100
-        self.Ny = 50
+        self.Lx = 808*1e3
+        self.Ly = 808*1e3
+        self.Nx = 101
+        self.Ny = 101
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
         self.depth = 50.0
@@ -31,17 +31,17 @@ class Params:
         self.dry_limit = 20
         self.MinWaterDepth = 0.01
         self.FrictionDepthLimit = 5e-3
-        self.f_cor = 1e-5
+        self.f_cor = 0e-5
         
         # Time parameters
-        self.dt = 10
+        self.dt = 20
         self.NT = 1000
         self.centerWeighting0 = 0.9998
         
         # Boundary conditions
-        self.obc_ele = ['Gra', 'Gra', 'Gra', 'Gra']
-        self.obc_u2d = ['Gra', 'Gra', 'Gra', 'Gra'] 
-        self.obc_v2d = ['Gra', 'Gra', 'Gra', 'Gra']
+        self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
+        self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo'] 
+        self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
         
         # Temporary variables
         self.CC1 = self.dt / self.dx
@@ -87,7 +87,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1[1:-1,1:-1] = H0[1:-1,1:-1] + CC1 * dMdx[1:-1,1:-1] + CC2 * dNdy[1:-1,1:-1]
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
@@ -198,8 +198,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
-    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
+    ududx = F.pad( ududx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
+    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
     
     Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
     # He&Lu Torch
@@ -210,8 +210,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
             - CC2 * vdudy                                  #v advection
             - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x)         #pgf
     
-    pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
-    pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
+    #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
+    #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
     
     mask_fs999_M = (flux_sign_M == 999)
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
@@ -254,8 +254,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdy = ddy(Pa,'inner')
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
-    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
-    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
+    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
+    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
     
     Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
@@ -277,7 +277,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
 
     N_new = N.clone()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
-    pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
+    #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
     # apply boundary condition
     z_w = 0 #.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
@@ -732,12 +732,12 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-400)**2 + (Y-400)**2) / (2 * 5.0**2))
+    H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
     #
     #Wx,Wy,Pa = generate_wind(X,Y,params)
     #Ws = torch.sqrt(Wx**2 + Wy**2)
     #
-    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0 + 10
+    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0
     Wy = np.ones((NT,X.shape[0],X.shape[1]))*0
     
     Wx = torch.from_numpy(Wx)
@@ -763,9 +763,16 @@ if __name__ == '__main__':
         u_list.append(dd(M_update[1]))
         v_list.append(dd(N_update[1]))
         
+        skip = 2
+        mag = np.sqrt( rho2v(M_update[1])**2+rho2u(N_update[1])**2)
+        xplot = X[:-1:skip,:-1:skip]
+        yplot = Y[:-1:skip,:-1:skip]
+        uplot = (rho2v(M_update[1])/mag)[::skip,::skip]
+        vplot = (rho2u(N_update[1])/mag)[::skip,::skip]
         pcolor(X, Y, eta_list[-1], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
         colorbar()
-        #quiver(X[:-1,:-1],Y[:-1,:-1],rho2v(M_update[1]),rho2u(N_update[1]), scale=10)
+        quiver(xplot,yplot,uplot,-vplot, scale=80)
+        #contour(X[:-1,:-1],Y[:-1,:-1],mag)
         xlabel("x [m]", fontname="serif", fontsize=12)
         ylabel("y [m]", fontname="serif", fontsize=12)
         title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
