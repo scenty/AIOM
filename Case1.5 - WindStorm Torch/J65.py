@@ -64,8 +64,7 @@ def generate_wind(X,Y,params,output = False):
     Wy = np.ones((NT,X.shape[0],X.shape[1]))*0
     #Pa = Wx * 0 + 1000
     for itime in range(params.NT):
-        typhoon_Pos = [200*1e3 + itime*params.dt*params.typhoon_Vec[0], 
-                      200*1e3 + itime*params.dt*params.typhoon_Vec[1]]
+        typhoon_Pos = params.typhoon_Pos[itime]
         Wx[itime], Wy[itime] = WindProfile(params.Wr, params.rMax, typhoon_Pos, params.typhoon_Vec, X, Y)
     
     Wx = torch.from_numpy(Wx).to(dtype=X.dtype, device=X.device)

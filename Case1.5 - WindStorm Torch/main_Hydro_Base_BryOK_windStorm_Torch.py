@@ -8,16 +8,16 @@ from matplotlib.pyplot import *
 import xarray as xr
 import torch
 import torch.nn.functional as F
-from tools import ddx,ddy,rho2u,rho2v,dd
+from tools import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tools import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
 class Params:
     def __init__(self):
         # Domain parameters
-        self.Lx = 808*1e3
-        self.Ly = 808*1e3
-        self.Nx = 101
-        self.Ny = 101
+        self.Lx = 800*1e3
+        self.Ly = 400*1e3
+        self.Nx = 100
+        self.Ny = 50
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
         self.depth = 50.0
@@ -27,21 +27,22 @@ class Params:
         self.rho_water = 1025.0
         self.rho_air = 1.2
         self.Cd = 2.5e-3
-        self.manning = 0.0
+        self.manning = 0.013
         self.dry_limit = 20
         self.MinWaterDepth = 0.01
         self.FrictionDepthLimit = 5e-3
-        self.f_cor = 0e-5
+        self.f_cor = 0.0 #1e-5
         
         # Time parameters
-        self.dt = 20
+        self.dt = 25
         self.NT = 1000
         self.centerWeighting0 = 0.9998
         
         # Boundary conditions
-        self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
-        self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo'] 
-        self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
+        #                 W      S      E      N
+        self.obc_ele = ['Rad', 'Rad', 'Rad', 'Rad']
+        self.obc_u2d = ['Rad', 'Rad', 'Rad', 'Rad'] 
+        self.obc_v2d = ['Rad', 'Rad', 'Rad', 'Rad']
         
         # Temporary variables
         self.CC1 = self.dt / self.dx
@@ -52,7 +53,10 @@ class Params:
         # Wind parameters
         self.Wr = 30
         self.rMax = 50*1000
-        self.typhoon_Vec = [5,0]
+        self.typhoon_Vec = [5,0] #m/s
+        self.typhoon_Pos = [[200*1e3 + itime*self.dt*self.typhoon_Vec[0], 
+                            200*1e3 + itime*self.dt*self.typhoon_Vec[1]]
+                            for itime in range(self.NT)]
 
 
 
@@ -87,7 +91,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] + CC1 * dMdx[1:-1,1:-1] + CC2 * dNdy[1:-1,1:-1]
+    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
@@ -198,11 +202,14 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = F.pad( ududx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
-    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
+    ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
+    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
     
-    Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
-    # He&Lu Torch
+    # Nu is applied here and in the friction below
+    N_exp = torch.cat( (N[0,:,0:1], N[0], N[0,:,-1:]), dim = 1)
+    Nu = rho2u(v2rho(N_exp))   #at u-point
+    # Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
+    # Torch
     phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
     M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
             + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
@@ -217,12 +224,13 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
 
     # 底摩擦
-    # friction_mask = (D0 > FrictionDepthLimit)
-    # MM = m0**2
-    # NN = torch.zeros_like(m0)
-    # Fx = g * Cf**2 / (D0**2.33 + 1e-9) * torch.sqrt(MM + NN) * m0
-    # Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
-    # M_val = M_val - torch.where(friction_mask, dt*Fx, torch.zeros_like(Fx))
+    friction_mask = (D0 > FrictionDepthLimit)
+    
+    #Nu was generated before
+    Fx = g * Cf**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
+    Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
+    Fx = torch.where(friction_mask, Fx, torch.zeros_like(Fx))
+    M_val = M_val - dt * Fx
 
     M_new = M.clone()
     M_new[1,1:-1,1:-1] = M_val[1:-1,1:-1]
@@ -254,38 +262,43 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params):
     dPdy = ddy(Pa,'inner')
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
-    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
-    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
+    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
+    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
     
-    Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
+    # Mv is applied here and in the friction below
+    M_exp = torch.cat( (M[0,0:1],M[0], M[0,-1:]), dim =0)
+    Mv = rho2u(v2rho(M_exp)) #at v-point, [ 1 ~ Nx-1, 1 ~ Ny-1]
+    #Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
     N_val = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
             + dt * (svstr - f_cor * Mv )
             - CC1 * udvdx
             - CC2 * vdvdy
-            - (CC4 * D0N * (h1u_N - h2u_N) + Pre_grad_y))
+            - (CC4 * D0N * (h2u_N - h1u_N) + Pre_grad_y))
       
     mask_fs999_N = (flux_sign_N == 999)
     N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
 
-    # friction_maskN = (D0N > FrictionDepthLimit)
-    # MM_N = torch.zeros_like(n0)
-    # NN_N = n0**2
-    # Fy = g * Cf**2 / (D0N**2.33 + 1e-9) * torch.sqrt(MM_N + NN_N) * n0
-    # Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
-    # N_val = N_val - torch.where(friction_maskN, dt*Fy, torch.zeros_like(Fy))
+    #底摩擦
+    friction_maskN = (D0N > FrictionDepthLimit)
+    
+    Fy = g * Cf**2 / (D0N**2.33 + 1e-9) * torch.sqrt(Mv**2 + n0**2) * n0
+    Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
+    Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
+    N_val = N_val - dt * Fy
 
     N_new = N.clone()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
     #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
     # apply boundary condition
-    z_w = 0 #.05 * np.sin(2 * np.pi / 0.25 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1)
-    z_s = 0
-    z_n = 0
+    z_w = 0 #torch.from_numpy(0.5 * np.sin(2 * np.pi / 5 * itime * dt) * (np.zeros((Ny + 1, 1)) + 1))
     z_e = 0
-    M_update = bcond_u2D(H_update, Z, M, D_M, z_w, z_e, params)
-    N_update = bcond_v2D(H_update, Z, N, D_N, z_s, z_n, params)
+    z_n = 0
+    z_s = 0
+    #TODO check       
+    M_new = bcond_u2D(H, Z, M_new, D_M, z_w, z_e, params)
+    N_new = bcond_v2D(H, Z, N_new, D_N, z_s, z_n, params)
     # M_new[:,0,:]=0
     # M_new[:,-1,:]=0
     # M_new[:,:,0]=0
@@ -486,7 +499,7 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
     Nx, Ny = H.shape[1], H.shape[2]  # 此处： L = Nx, M = Ny, Lm = Nx - 1, Mm = Ny - 1
     # Southern side
     if obc_u2d[1] == 'Fla':
-        ubar_s = np.zeros((Nx - 1, 1), dtype=float)
+        ubar_s = torch.zeros((Nx - 1, 1), dtype=float)
         for ix in range(Nx-1):
             cff = params.dt * 0.5 / params.dy
             cff1 = np.sqrt(params.g * 0.5 * (Z[ix, 1] + H[0, ix, 1] + Z[ix + 1, 1] + H[0, ix + 1, 1]))
@@ -499,7 +512,7 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
     elif obc_u2d[1] == 'Clo':
         M[1, :, 0] = 0.0
     if obc_u2d[1] == 'Rad':
-        ubar_s = np.zeros((Nx - 1, 1), dtype=float)
+        ubar_s = torch.zeros((Nx - 1, 1), dtype=float)
         for ix in range(Nx-1):
             cff = Z[ix, 0] + H[0, ix, 0] + Z[ix + 1, 0] + H[0, ix + 1, 0]
             cff1 = M[0, ix, 0] / D_M[ix, 0] - M[0, ix, 1] / D_M[ix, 1]
@@ -509,7 +522,7 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
             M[1, ix, 0] = ubar_s[ix] * D_M[ix, 0]
     # northern side
     if obc_u2d[3] == 'Fla':
-        ubar_n = np.zeros((Nx - 1, 1), dtype=float)
+        ubar_n = torch.zeros((Nx - 1, 1), dtype=float)
         for ix in range(Nx-1):
             cff = params.dt * 0.5 / params.dy
             cff1 = np.sqrt(params.g * 0.5 * (Z[ix, Ny - 2] + H[0, ix, Ny - 2] + Z[ix + 1, Ny - 2] + H[0, ix + 1, Ny - 2]))
@@ -522,7 +535,7 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
     elif obc_u2d[3] == 'Clo':
         M[1, :, Ny-1] = 0.0
     if obc_u2d[3] == 'Rad':
-        ubar_n = np.zeros((Nx - 1, 1), dtype=float)
+        ubar_n = torch.zeros((Nx - 1, 1), dtype=float)
         for ix in range(Nx-1):
             cff = Z[ix, Ny - 1] + H[0, ix, Ny - 1] + Z[ix + 1, Ny - 1] + H[0, ix + 1, Ny - 1]
             cff1 = M[0, ix, Ny - 1] / D_M[ix, Ny - 1] - M[0, ix, Ny - 2] / D_M[ix, Ny - 2]
@@ -532,7 +545,7 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
             M[1, ix, Ny - 1] = ubar_n[ix] * D_M[ix, Ny - 1]
     # western side
     if obc_u2d[0] == 'Fla':
-        ubar_w = np.zeros((Ny, 1), dtype=float)
+        ubar_w = torch.zeros((Ny, 1), dtype=float)
         for iy in range(Ny):
             bry_pgr = -params.g * (H[0, 1, iy] - z_w[iy]) * 0.5 * params.CC1
             bry_cor = 0.0 # should add
@@ -555,16 +568,16 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
             M[1, 0, iy] = np.float64(ubar_w[iy]) * D_M[0, iy]
     # Eastern side
     if obc_u2d[2] == 'Fla':
-        ubar_e = np.zeros((Ny, 1), dtype=float)
+        ubar_e = torch.zeros((Ny, 1), dtype=float)
         for iy in range(Ny):
-            bry_pgr = -g * (z_e[iy] - H[0, Nx - 3, iy]) * 0.5 * CC1
+            bry_pgr = params.g * (z_e[iy] - H[0, Nx - 3, iy]) * 0.5 * params.CC1
             bry_cor = 0.0  # should add
             cff1 = 1.0 / (0.5 * (Z[Nx - 3, iy] + H[0, Nx - 3, iy] + Z[Nx - 2, iy] + H[0, Nx - 2, iy]))
             bry_str = 0.0  # should add surface forcing
-            Cx = 1.0 / np.sqrt(g * 0.5 * (Z[Nx - 2, iy] + H[0, Nx - 2, iy] + Z[Nx - 3, iy] + H[0, Nx - 3, iy]))
-            cff2 = Cx / dx
+            Cx = 1.0 / np.sqrt(params.g * 0.5 * (Z[Nx - 2, iy] + H[0, Nx - 2, iy] + Z[Nx - 3, iy] + H[0, Nx - 3, iy]))
+            cff2 = Cx / params.dx
             bry_val = M[0, Nx - 3, iy] / D_M[Nx - 3, iy] + cff2 * (bry_pgr + bry_cor + bry_str)
-            Cx = np.sqrt(g * cff1)
+            Cx = np.sqrt(params.g * cff1)
             ubar_e[iy] = bry_val + Cx * (0.5 * (H[0, Nx - 3, iy] + H[0, Nx - 2, iy]) - z_e[iy])
             M[1, Nx - 2, iy] = ubar_e[iy] * D_M[Nx - 2, iy]
     elif obc_u2d[2] == 'Gra':
@@ -572,9 +585,9 @@ def bcond_u2D(H, Z, M, D_M, z_w, z_e, params):
     elif obc_u2d[2] == 'Clo':
         M[1, Nx - 2, :] = 0.0
     elif obc_u2d[2] == 'Rad':
-        ubar_e = np.zeros((Ny, 1), dtype=float)
+        ubar_e = torch.zeros((Ny, 1), dtype=float)
         for iy in range(Ny):
-            ubar_e[iy] = 1.0 * np.sqrt(g / (Z[Nx - 1, iy] + H[1, Nx - 1, iy])) * H[1, Nx - 1, iy]
+            ubar_e[iy] = 1.0 * np.sqrt(params.g / (Z[Nx - 1, iy] + H[1, Nx - 1, iy])) * H[1, Nx - 1, iy]
             M[1, Nx - 2, iy] = ubar_e[iy] * D_M[Nx - 2, iy]
 
     return M
@@ -600,7 +613,7 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     
     # western side
     if obc_v2d[0] == 'Fla':
-        vbar_w = np.zeros((Ny - 1, 1), dtype=float)
+        vbar_w = torch.zeros((Ny - 1, 1), dtype=float)
         for iy in range(Ny-1):
             cff = params.dt * 0.5 / params.dx
             cff1 = np.sqrt(params.g * 0.5 * (Z[1, iy] + H[0, 1, iy] + Z[1, iy + 1] + H[0, 1, iy + 1]))
@@ -613,7 +626,7 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     elif obc_v2d[0] == 'Clo':
         N[1, 0, :] = 0.0
     elif obc_v2d[0] == 'Rad':
-        vbar_w = np.zeros((Ny - 1, 1), dtype=float)
+        vbar_w = torch.zeros((Ny - 1, 1), dtype=float)
         for iy in range(Ny - 1):
             cff = Z[0, iy] + H[0, 0, iy] + Z[0, iy + 1] + H[0, 0, iy + 1]
             cff1 = N[0, 0, iy] / D_N[0, iy] - N[0, 1, iy] / D_N[1, iy]
@@ -624,7 +637,7 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     
     # Eastern side
     if obc_v2d[2] == 'Fla':
-        vbar_e = np.zeros((Ny - 1, 1), dtype=float)
+        vbar_e = torch.zeros((Ny - 1, 1), dtype=float)
         for iy in range(Ny - 1):
             cff = params.dt * 0.5 / params.dx
             cff1 = np.sqrt(params.g * 0.5 * (Z[Nx - 2, iy] + H[0, Nx - 2, iy] + Z[Nx - 2, iy + 1] + H[0, Nx - 2, iy + 1]))
@@ -637,7 +650,7 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     elif obc_v2d[2] == 'Clo':
         N[1, Nx - 1, :] = 0.0
     elif obc_v2d[2] == 'Rad':
-        vbar_e = np.zeros((Ny - 1, 1), dtype=float)
+        vbar_e = torch.zeros((Ny - 1, 1), dtype=float)
         for iy in range(Ny - 1):
             cff = Z[Nx - 1, iy] + H[0, Nx - 1, iy] + Z[Nx - 1, iy + 1] + H[0, Nx - 1, iy + 1]
             cff1 = N[0, Nx - 1, iy] / D_N[Nx - 1, iy] - N[0, Nx - 2, iy] / D_N[Nx - 2, iy]
@@ -648,7 +661,7 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     
     # Southern side
     if obc_v2d[1] == 'Fla':
-        vbar_s = np.zeros((Nx, 1), dtype=float)
+        vbar_s = torch.zeros((Nx, 1), dtype=float)
         for ix in range(Nx):
             bry_pgr = -params.g * (H[0, ix, 0] - z_s[ix]) * 0.5 * params.CC2
             bry_cor = 0.0
@@ -665,25 +678,25 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     elif obc_v2d[1] == 'Clo':
         N[1, :, 0] = 0.0
     elif obc_v2d[1] == 'Rad':
-        vbar_s = np.zeros((Nx, 1), dtype=float)
+        vbar_s = torch.zeros((Nx, 1), dtype=float)
         for ix in range(Nx):
             vbar_s[ix] = -1.0 * np.sqrt(params.g / (Z[ix, 0] + H[1, ix, 0])) * H[1, ix, 0]
             N[1, ix, 0] = vbar_s[ix] * D_N[ix, 0]
     
     # northern side
     if obc_v2d[3] == 'Fla':
-        vbar_n = np.zeros((Nx, 1), dtype=float)
+        vbar_n = torch.zeros((Nx, 1), dtype=float)
         for ix in range(Nx):
             bry_pgr = -params.g * (z_n[ix] - H[0, ix, Ny -3]) * 0.5 * params.CC2
             bry_cor = 0.0
-            bry_pgr = -g * (z_n[ix] - H[0, ix, Ny -3]) * 0.5 * CC2
+            bry_pgr = -params.g * (z_n[ix] - H[0, ix, Ny -3]) * 0.5 * params.CC2
             bry_cor = 0.0  # should add
             cff1 = 1.0 / (0.5 * (Z[ix, Ny - 3] + H[0, ix, Ny - 3] + Z[ix, Ny - 2] + H[0, ix, Ny - 2]))
             bry_str = 0.0  # should add surface forcing
-            Ce = 1.0 / np.sqrt(g * 0.5 * (Z[ix, Ny - 2] + H[0, ix, Ny - 2] + Z[ix, Ny - 3] + H[0, ix, Ny - 3]))
-            cff2 = Ce / dy
+            Ce = 1.0 / np.sqrt(params.g * 0.5 * (Z[ix, Ny - 2] + H[0, ix, Ny - 2] + Z[ix, Ny - 3] + H[0, ix, Ny - 3]))
+            cff2 = Ce / params.dy
             bry_val = N[0, ix, Ny - 3] / D_N[ix, Ny - 3] + cff2 * (bry_pgr + bry_cor + bry_str)
-            Ce = np.sqrt(g * cff1)
+            Ce = np.sqrt(params.g * cff1)
             vbar_n[ix] = bry_val + Ce * (0.5 * (H[0, ix, Ny - 3] + H[0, ix, Ny - 2]) - z_n[ix])
             N[1, ix, Ny - 2] = vbar_n[ix] * D_N[ix, Ny-2]
     elif obc_v2d[3] == 'Gra':
@@ -691,9 +704,9 @@ def bcond_v2D(H, Z, N, D_N, z_s, z_n, Params):
     elif obc_v2d[3] == 'Clo':
         N[1, :, Ny - 2] = 0.0
     elif obc_v2d[3] == 'Rad':
-        vbar_n = np.zeros((Nx, 1), dtype=float)
+        vbar_n = torch.zeros((Nx, 1), dtype=float)
         for ix in range(Nx):
-            vbar_n[ix] = 1.0 * np.sqrt(g / (Z[ix, Ny - 1] + H[1, ix, Ny - 1])) * H[1, ix, Ny - 1]
+            vbar_n[ix] = 1.0 * np.sqrt(params.g / (Z[ix, Ny - 1] + H[1, ix, Ny - 1])) * H[1, ix, Ny - 1]
             N[1, ix, Ny - 2] = vbar_n[ix] * D_N[ix, Ny - 2]
 
     return N
@@ -732,28 +745,28 @@ if __name__ == '__main__':
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
     
-    H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
+    # H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
     #
-    #Wx,Wy,Pa = generate_wind(X,Y,params)
-    #Ws = torch.sqrt(Wx**2 + Wy**2)
+    Wx,Wy,Pa = generate_wind(X,Y,params)
+    Ws = torch.sqrt(Wx**2 + Wy**2)
     #
-    Wx = np.ones((NT,X.shape[0],X.shape[1]))*0
-    Wy = np.ones((NT,X.shape[0],X.shape[1]))*0
-    
-    Wx = torch.from_numpy(Wx)
-    Wy = torch.from_numpy(Wy)
-    Pa = Wx * 0 + 1000
-    
+    # Wx = np.ones((NT,X.shape[0],X.shape[1]))*0 + 0
+    # Wy = np.ones((NT,X.shape[0],X.shape[1]))*0 
+    # Wx = torch.from_numpy(Wx)
+    # Wy = torch.from_numpy(Wy)
+    # Pa = Wx * 0 + 1000
+    #%%
     eta_list = list()
     u_list = list()
     v_list = list()
-    anim_interval = 1
+    anim_interval = 10
     
     for itime in range(params.NT):
         print(f"nt = {itime} / {params.NT}")
         params.itime=itime
         H_update = mass_cartesian_torch(H, Z, M, N, params)
         
+        aa = dd(H_update[1])
         M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[itime], Wy[itime], Pa[itime], params)
 
         H[0] = H_update[1]
@@ -763,22 +776,18 @@ if __name__ == '__main__':
         u_list.append(dd(M_update[1]))
         v_list.append(dd(N_update[1]))
         
-        skip = 2
-        mag = np.sqrt( rho2v(M_update[1])**2+rho2u(N_update[1])**2)
-        xplot = X[:-1:skip,:-1:skip]
-        yplot = Y[:-1:skip,:-1:skip]
-        uplot = (rho2v(M_update[1])/mag)[::skip,::skip]
-        vplot = (rho2u(N_update[1])/mag)[::skip,::skip]
-        pcolor(X, Y, eta_list[-1], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
-        colorbar()
-        quiver(xplot,yplot,uplot,-vplot, scale=80)
-        #contour(X[:-1,:-1],Y[:-1,:-1],mag)
-        xlabel("x [m]", fontname="serif", fontsize=12)
-        ylabel("y [m]", fontname="serif", fontsize=12)
-        title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
-        axis('equal')
-        #fig.savefig("ele_Rad" + f"{itime}" + "s.jpg", format='jpg', dpi=300, bbox_inches='tight')
-        show()
+        if itime%anim_interval==0:
+            mag = np.sqrt( rho2v(M_update[1])**2+rho2u(N_update[1])**2)
+            pcolor(X, Y, eta_list[-1], vmin=-.2,vmax=.2, cmap=plt.cm.RdBu_r)
+            colorbar()
+            #quiver(X[:-1,:-1],Y[:-1,:-1],rho2v(M_update[1]),rho2u(N_update[1]), scale=100)
+            contour(X[:-1,:-1],Y[:-1,:-1],mag)
+            xlabel("x [m]", fontname="serif", fontsize=12)
+            ylabel("y [m]", fontname="serif", fontsize=12)
+            title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
+            axis('equal')
+            #fig.savefig("ele_Rad" + f"{itime}" + "s.jpg", format='jpg', dpi=300, bbox_inches='tight')
+            show()
         
     
     
