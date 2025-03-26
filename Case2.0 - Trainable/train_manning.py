@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-from J65 import *
+from J65_torch import *
 from matplotlib.pyplot import *
 import xarray as xr
 import torch
@@ -12,53 +12,56 @@ from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 import torch.nn as nn
 import torch.optim as optim
-from CNN_noip import CNN1
+from CNN_manning import CNN1
+import torch
+
 class Params:
-    def __init__(self):
+    def __init__(self, device):
         # Domain parameters
-        self.Lx = 800*1e3
-        self.Ly = 400*1e3
-        self.Nx = 100
-        self.Ny = 50
+        self.Lx = torch.tensor(800 * 1e3, device=device)
+        self.Ly = torch.tensor(400 * 1e3, device=device)
+        self.Nx = torch.tensor(20, device=device)
+        self.Ny = torch.tensor(10, device=device)
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
-        self.depth = 50.0
-        
+        self.depth = torch.tensor(50.0, device=device)
+
         # Physical constants
-        self.g = 9.8
-        self.rho_water = 1025.0
-        self.rho_air = 1.2
-        self.Cd = 2.5e-3
-        self.manning = 0.013
-        self.dry_limit = 20
-        self.MinWaterDepth = 0.01
-        self.FrictionDepthLimit = 5e-3
-        self.f_cor = 0.0 #1e-5
-        
+        self.g = torch.tensor(9.8, device=device)
+        self.rho_water = torch.tensor(1025.0, device=device)
+        self.rho_air = torch.tensor(1.2, device=device)
+        self.Cd = torch.tensor(2.5e-3, device=device)
+        self.manning = torch.tensor(0.15, device=device)
+        self.dry_limit = torch.tensor(20.0, device=device)
+        self.MinWaterDepth = torch.tensor(0.01, device=device)
+        self.FrictionDepthLimit = torch.tensor(5e-3, device=device)
+        self.f_cor = torch.tensor(0.0, device=device) #1e-5
+
         # Time parameters
-        self.dt = 25
-        self.NT = 1000
-        self.centerWeighting0 = 0.9998
-        
+        self.dt = torch.tensor(100.0, device=device)
+        self.NT = torch.tensor(200, device=device)
+        self.centerWeighting0 = torch.tensor(0.9998, device=device)
+
         # Boundary conditions
-        #                 W      S      E      N
         self.obc_ele = ['Rad', 'Rad', 'Rad', 'Rad']
-        self.obc_u2d = ['Rad', 'Rad', 'Rad', 'Rad'] 
+        self.obc_u2d = ['Rad', 'Rad', 'Rad', 'Rad']
         self.obc_v2d = ['Rad', 'Rad', 'Rad', 'Rad']
-        
+
         # Temporary variables
         self.CC1 = self.dt / self.dx
         self.CC2 = self.dt / self.dy
         self.CC3 = self.CC1 * self.g
         self.CC4 = self.CC2 * self.g
-        
+
         # Wind parameters
-        self.Wr = 30
-        self.rMax = 50*1000
-        self.typhoon_Vec = [5,0] #m/s
-        self.typhoon_Pos = [[200*1e3 + itime*self.dt*self.typhoon_Vec[0], 
-                            200*1e3 + itime*self.dt*self.typhoon_Vec[1]]
+        self.Wr = torch.tensor(30.0, device=device)
+        self.rMax = torch.tensor(50 * 1000, device=device)
+        self.typhoon_Vec = torch.tensor([5, 0], device=device)  # m/s
+        self.typhoon_Pos = [[200 * 1e3 + itime * self.dt * self.typhoon_Vec[0],
+                             200 * 1e3 + itime * self.dt * self.typhoon_Vec[1]]
                             for itime in range(self.NT)]
+        self.typhoon_Pos = torch.tensor(self.typhoon_Pos, device=device)
+
 
 
 
@@ -97,7 +100,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
-    mask_deep = (Z <= -dry_limit)
+    mask_deep = (Z <= -dry_limit).to(H1.device)
     H1 = torch.where(mask_deep, torch.zeros_like(H1), H1)
 
     ZH0 = Z + H0
@@ -127,7 +130,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     #H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
     return H_new
 
-def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, Fx, Fy):
+def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     """
     - H: water elevation
     - Z: domain depth
@@ -164,7 +167,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, Fx, Fy):
     g = params.g
     MinWaterDepth = params.MinWaterDepth
     FrictionDepthLimit = params.FrictionDepthLimit
-    Cf = params.manning
+    Cf = manning/10
     dt = params.dt
     phi = params.centerWeighting0
     Nx = params.Nx
@@ -173,7 +176,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, Fx, Fy):
     # 重构流深, TODO(check Lechi的修改)
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
     # get forcing
-    windSpeed = np.sqrt(Wx * Wx + Wy * Wy)
+    windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)
     sustr = rho2u( rho_air / rho_water * Cd * windSpeed * Wx)
     svstr = rho2v( rho_air / rho_water * Cd * windSpeed * Wy)
     
@@ -224,8 +227,16 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, Fx, Fy):
     
     mask_fs999_M = (flux_sign_M == 999)
     M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
-    
-    M_val = M_val - dt * Fx[:-1]/10000000
+    # 底摩擦
+    friction_mask = (D0 > FrictionDepthLimit)
+    epsilon = 1e-9
+
+    #Nu was generated before
+    Fx = g * Cf**2 / (D0**2.33 + 1e-9) * torch.sqrt(torch.clamp(m0**2 + Nu**2, min=epsilon)) * m0
+    Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
+    Fx = torch.where(friction_mask, Fx, torch.zeros_like(Fx))
+    M_val = M_val - dt * Fx
+
 
     M_new = M.clone()
     M_new[1,1:-1,1:-1] = M_val[1:-1,1:-1]
@@ -273,10 +284,15 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, Fx, Fy):
       
     mask_fs999_N = (flux_sign_N == 999)
     N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
-
-
-    N_val = N_val - dt * Fy[:,:-1]/10000000
-
+    #底摩擦
+    friction_maskN = (D0N > FrictionDepthLimit)
+    epsilon = 1e-9
+    
+    Fy = g * Cf**2 / (D0N**2.33 + 1e-9) * torch.sqrt(torch.clamp(Mv**2 + n0**2, min=epsilon)) * n0
+    Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
+    Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
+    N_val = N_val - dt * Fy
+    
     N_new = N.clone()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
     #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
@@ -899,8 +915,10 @@ def plot_stage_Point(var2plot, x_ind):
 
 
 if __name__ == '__main__':
-    params = Params()
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(device)
+    params = Params(device)
+
     # 读取 eta 数据
     ds_eta = xr.open_dataset('out_eta.nc')
     eta = ds_eta['eta']  # 或者直接使用 ds_eta.eta
@@ -923,14 +941,16 @@ if __name__ == '__main__':
     x = torch.linspace(0, params.Lx, params.Nx + 1)
     y = torch.linspace(0, params.Ly, params.Ny + 1)
     X, Y = torch.meshgrid(x, y)
-    Fx_array = np.zeros((v_array.shape[0], params.Nx+1, params.Ny+1))
-    Fy_array = np.zeros((v_array.shape[0],  params.Nx+1, params.Ny+1))
+    X = X.to(device)
+    Y = Y.to(device)
+    manning_array = np.zeros((v_array.shape[0], params.Nx+1, params.Ny+1))
+
     
     M = torch.zeros((2, params.Nx, params.Ny+1))
     N = torch.zeros((2, params.Nx+1, params.Ny))
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
-    Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
-    
+    # 确保将 params.depth 转移到正确的设备上
+    Z = torch.ones((params.Nx + 1, params.Ny + 1), device=device) * params.depth.to(device)
     # H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
     #
     Wx,Wy,Pa = generate_wind(X,Y,params)
@@ -942,94 +962,94 @@ if __name__ == '__main__':
     # Wy = torch.from_numpy(Wy)
     # Pa = Wx * 0 + 1000
     X = np.stack([eta_array, u_array, v_array], axis=1)  
-    Y = np.stack([Fx_array, Fy_array], axis=1)               
+    Y = manning_array          
     
     num_total_steps = X.shape[0]
-    num_time_steps_train = 1000     
+    num_time_steps_train = 200    
     
     X_tensor = torch.tensor(X, dtype=torch.float32)
     Y_tensor = torch.tensor(Y, dtype=torch.float32)
     eta_array = torch.tensor(eta_array, dtype=torch.float32)
     
     input_channel = 3
-    output_channel = 2
     model = CNN1(shapeX=input_channel).to(device)
     model.float()  
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     torch.autograd.set_detect_anomaly(True)
     
     # 优化后的训练循环：直接利用整个训练序列（X_tensor）进行多步模拟
-    num_epochs = 50
-    chunk_size = 3  # 每隔多少步反传一次
+    num_epochs = 100
+    chunk_size = 10  # 每隔多少步反传一次
     eta_list = []
     u_list = []
     v_list = []
     train_loss_history = []
-    Fx_list = []
-    Fy_list = []
+    manning_list = []
+
     loss_list = []
 
-        
+    # 在训练循环中确保数据也转移到 GPU
     for epoch in range(num_epochs):
         model.train()
-        running_loss = 0.0  # 累计当前 epoch 的总 loss
+        running_loss = 0.0
         acc_loss = 0.0      # 累计 chunk 内 loss
-    
+        # 训练数据也需要转移到 GPU
         H = torch.zeros((2, params.Nx+1, params.Ny+1)).clone().detach().requires_grad_(True).to(device)
         M = torch.zeros((2, params.Nx, params.Ny+1)).clone().detach().requires_grad_(True).to(device)
         N = torch.zeros((2, params.Nx+1, params.Ny)).clone().detach().requires_grad_(True).to(device)
     
         for t in range(params.NT):
-            print(f"nt = {t} / {params.NT}")
-            # 当前输入：取第 t 个时间步（shape: [1, 3, Nx, Ny]）
             current_input = X_tensor[t].unsqueeze(0).to(device).float()
-            output = model(current_input).squeeze(0)  # 输出 shape: [2, Nx, Ny]
-            Fx_t, Fy_t = output[0], output[1]
+            manning = model(current_input).squeeze(0)
     
-            # 物理更新
             H_update = mass_cartesian_torch(H, Z, M, N, params)
-    
-            M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[t], Wy[t], Pa[t], params, Fx_t, Fy_t)
-      
-            # 计算当前时间步的 loss，与外部 eta_array 比较（保持不变）
-            loss_t = criterion(H_update[1], eta_array[t])
+            M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[t], Wy[t], Pa[t], params, manning)
+            # scale = 1000
+            # loss_t = criterion(H_update[1] * scale, eta_array[t].to(device) * scale)
+            loss_t = criterion(H_update[1], eta_array[t].to(device))
             acc_loss += loss_t
-            
+
     
-            # 记录 H, M, N 在最后一个epoch的所有时刻值
-            if epoch == num_epochs - 1:
-                eta_list.append(dd(H_update[1]))
-                u_list.append(dd(M_update[1]))
-                v_list.append(dd(N_update[1]))
-    
-                Fx_list.append(Fx_t.detach().cpu().numpy())
-                Fy_list.append(Fy_t.detach().cpu().numpy())
-            
-            # 分段反向传播：每 chunk_size 步更新一次
             if (t + 1) % chunk_size == 0 or (t == num_time_steps_train - 1):
                 optimizer.zero_grad()
                 acc_loss.backward()
                 optimizer.step()
     
                 running_loss += acc_loss.item()
-                # 截断计算图，更新状态
-                H = torch.stack((H_update[1].clone(), H_update[1].clone()), dim=0).detach().requires_grad_(True)
-                M = torch.stack((M_update[1].clone(), M_update[1].clone()), dim=0).detach().requires_grad_(True)
-                N = torch.stack((N_update[1].clone(), N_update[1].clone()), dim=0).detach().requires_grad_(True)
+                # 更新 H, M, N 的状态
+                H = torch.stack((H_update[1].clone(), H_update[1].clone()), dim=0).detach().requires_grad_(True).to(device)
+                M = torch.stack((M_update[1].clone(), M_update[1].clone()), dim=0).detach().requires_grad_(True).to(device)
+                N = torch.stack((N_update[1].clone(), N_update[1].clone()), dim=0).detach().requires_grad_(True).to(device)
                 acc_loss = 0.0
-    
-            else:  # 继续传播梯度，不 detach
+            else:
                 H = torch.stack((H_update[1].clone(), H_update[1].clone()), dim=0)
                 M = torch.stack((M_update[1].clone(), M_update[1].clone()), dim=0)
                 N = torch.stack((N_update[1].clone(), N_update[1].clone()), dim=0)
-            
-            
-            
+    
+            if epoch == num_epochs - 1:
+                # 记录变量
+                eta_list.append(dd(H_update[1]))  # 假设 dd() 是某种处理函数
+                u_list.append(dd(M_update[1]))
+                v_list.append(dd(N_update[1]))
+                manning_list.append(manning.detach().cpu().numpy())
+                
+                # 保存数据到文件
+                np.save('eta_list_train_manning.npy', np.array(eta_list))  # 转换为 numpy 数组并保存
+                np.save('u_list_train_manning.npy', np.array(u_list))      # 转换为 numpy 数组并保存
+                np.save('v_list_train_manning.npy', np.array(v_list))      # 转换为 numpy 数组并保存
+                np.save('manning_list_train.npy', np.array(manning_list))    # 转换为 numpy 数组并保存
+
+                
+                # 保存损失历史
+                np.save('train_loss_history_manning.npy', np.array(train_loss_history))  # 转换为 numpy 数组并保存
+                
+                # 保存模型权重（state_dict）
+                torch.save(model.state_dict(), 'model_checkpoint_manning.pth')
+                
+                print("Training complete and data saved.")
+    
         avg_train_loss = running_loss / num_time_steps_train
         train_loss_history.append(avg_train_loss)
-    
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.6f}")
-
-
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.15f}")
