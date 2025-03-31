@@ -27,35 +27,38 @@ def toc():
 class Params:
     def __init__(self, device):
         # Domain parameters
-        self.Lx = torch.tensor(800 * 1e3, device=device)
-        self.Ly = torch.tensor(400 * 1e3, device=device)
-        self.Nx = torch.tensor(20, device=device)
-        self.Ny = torch.tensor(10, device=device)
+        self.Lx = 800 * 1e3
+        self.Ly = 400 * 1e3
+        self.Nx = 20
+        self.Ny = 10
         self.dx = self.Lx / self.Nx
         self.dy = self.Ly / self.Ny
         self.depth = torch.tensor(50.0, device=device)
 
         # Physical constants
-        self.g = torch.tensor(9.8, device=device)
-        self.rho_water = torch.tensor(1025.0, device=device)
-        self.rho_air = torch.tensor(1.2, device=device)
+        self.g = 9.8
+        self.rho_water = 1025
+        self.rho_air = 1.2
         self.Cd = torch.tensor(2.5e-3, device=device)
         self.manning = torch.tensor(0.15, device=device)
-        self.dry_limit = torch.tensor(20.0, device=device)
-        self.MinWaterDepth = torch.tensor(0.01, device=device)
-        self.FrictionDepthLimit = torch.tensor(5e-3, device=device)
-        self.f_cor = torch.tensor(0.0, device=device) #1e-5
+        self.dry_limit = 20
+        self.MinWaterDepth = 0.01
+        self.FrictionDepthLimit = 5e-3
+        self.f_cor = 0.0 #1e-5
 
         # Time parameters
-        self.dt = torch.tensor(100.0, device=device)
-        self.NT = torch.tensor(200, device=device)
-        self.centerWeighting0 = torch.tensor(0.9998, device=device)
+        self.dt = 100.0
+        self.NT = 20
+        self.centerWeighting0 = 0.9998
 
         # Boundary conditions
         #                 W      S      E      N
         self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
         self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo']
         self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
+        # for torch.F.pad operations, the dimensions are
+        # F.pad( input_tensor, (S, N, W, E))
+        #                     (左，右，上，下)
 
         # Temporary variables
         self.CC1 = self.dt / self.dx
@@ -132,12 +135,14 @@ def mass_cartesian_torch(H, Z, M, N, params):
     H1 = torch.where(c5, torch.zeros_like(H1), H1)
        
     # 构造新的 H，不再对 H.clone() 进行切片赋值，而是用 stack 构造新张量
-    H_new = torch.stack((H0, H1), dim=0)
-    H_new = bcond_zeta_torch(H_new, Z, params)
-    
-    assert not torch.any(torch.isnan(H_new))
     #TODO boundary tide
     #H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
+    
+    H_new = torch.stack((H0, H1), dim=0)
+    #H_new = bcond_zeta_torch(H_new, Z, params)
+    
+    assert not torch.any(torch.isnan(H_new))
+    
     return H_new
 
 def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
@@ -177,7 +182,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     g = params.g
     MinWaterDepth = params.MinWaterDepth
     FrictionDepthLimit = params.FrictionDepthLimit
-    Cf = manning/10
+    Cf = manning
     dt = params.dt
     phi = params.centerWeighting0
     Nx = params.Nx
@@ -303,9 +308,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
     N_val = N_val - dt * Fy
     
-    tic()
     N_new = N.clone()
-    toc()
     N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
     #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
@@ -315,8 +318,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     z_n = 0
     z_s = 0
     #TODO check       
-    M_new = bcond_u2D_torch(H, Z, M_new, D_M, z_w, z_e, params)
-    N_new = bcond_v2D_torch(H, Z, N_new, D_N, z_s, z_n, params)
+    #M_new = bcond_u2D_torch(H, Z, M_new, D_M, z_w, z_e, params)
+    #N_new = bcond_v2D_torch(H, Z, N_new, D_N, z_s, z_n, params)
     assert not torch.any(torch.isnan(M_new))
     assert not torch.any(torch.isnan(N_new))
     
@@ -414,8 +417,10 @@ def bcond_zeta_torch(H, Z, params):
     CC1 = params.CC1
     CC2 = params.CC2
     g = params.g
-
-    Nx, Ny = H.shape[1], H.shape[2]
+    if H.ndim == 3:
+        Nx, Ny = H.shape[1], H.shape[2]
+    else: # H.ndim==2
+        Nx, Ny = H.shape[0], H.shape[1]
     # western side
     if obc_ele[0] == 'Cha_e':  # explicit Chapman boundary condition
         for iy in range(Ny):
@@ -499,8 +504,12 @@ def bcond_u2D_torch(H, Z, M, D_M, z_w, z_e, params):
         - params: 参数结构体，包含 obc_u2d, dt, dx, dy, g, CC1, CC2 等
     """
     obc_u2d = params.obc_u2d
-    Nx, Ny = H.shape[1], H.shape[2]
-    M_new = M[1].clone()
+    if H.ndim == 3:
+        Nx, Ny = H.shape[1], H.shape[2]
+        M_new = M.clone()
+    else: # H.ndim==2
+        Nx, Ny = H.shape[0], H.shape[1]
+        M_new = M.clone()
     
     # ---------------------------
     # 西侧边界更新：更新 M_new[1, 0, :]（更新第0行）
@@ -524,12 +533,10 @@ def bcond_u2D_torch(H, Z, M, D_M, z_w, z_e, params):
         M_new = torch.stack([M_new[0], M_new_row], dim=0)
     
     elif obc_u2d[0] == 'Gra':
-        new_row = M_new[1][1, :].clone()
-        M_new_row = torch.cat([new_row.unsqueeze(0), M_new[1][1:, :].clone()], dim=0)
-        M_new = torch.stack([M_new[0], M_new_row], dim=0)
+        M_new[1] = F.pad( M_new[1:2, 1:], (0,0,1,0), mode='replicate') #pad for West, up 
     
     elif obc_u2d[0] == 'Clo':
-        M_new = F.pad( M_new[1:], (1,0,0,0) ) #pad for West
+        M_new[1] = F.pad( M_new[1, 1:], (0,0,1,0) ) #pad for West, up 
     
     elif obc_u2d[0] == 'Rad':
         ubar_w_list = []
@@ -565,15 +572,11 @@ def bcond_u2D_torch(H, Z, M, D_M, z_w, z_e, params):
         M_new_row = torch.cat([M_row_above, new_row.unsqueeze(0), M_row_below], dim=0)
         M_new = torch.stack([M_new[0], M_new_row], dim=0)
     
-    elif obc_u2d[2] == 'Gra':
-        new_row = M_new[1][Nx-3, :].clone()
-        M_row_above = M_new[1][:Nx-2, :].clone()
-        M_row_below = M_new[1][Nx-1:, :].clone()
-        M_new_row = torch.cat([M_row_above, new_row.unsqueeze(0), M_row_below], dim=0)
-        M_new = torch.stack([M_new[0], M_new_row], dim=0)
-    
+    elif obc_u2d[2] == 'Gra':        
+        M_new[1] = F.pad( M_new[1:2,:-1], (0,0,0,1), mode='replicate') #pad for East
+        
     elif obc_u2d[2] == 'Clo':
-        M_new = F.pad( M_new[:-1], (0,1,0,0) ) #pad for East
+        M_new[1] = F.pad( M_new[1,:-1], (0,0,0,1) ) #pad for East
     
     elif obc_u2d[2] == 'Rad':
         ubar_e_list = []
@@ -608,16 +611,14 @@ def bcond_u2D_torch(H, Z, M, D_M, z_w, z_e, params):
         M_new = torch.stack([M_new[0], M_new_row], dim=0)
     
     elif obc_u2d[1] == 'Gra':
-        new_col = M_new[1][:, 1:2].clone()  # 用第1列替换第0列
-        M_new_row = torch.cat([new_col, M_new[1][:, 1:]], dim=1)
-        M_new = torch.stack([M_new[0], M_new_row], dim=0)
+        M_new[1] = F.pad( M_new[1:2, :, 1:], (1,0,0,0), mode='replicate') #pad for South, fast by 20%
     
     elif obc_u2d[1] == 'Clo':
         # new_col = torch.zeros((Nx-1,), dtype=M_new.dtype, device=M_new.device).unsqueeze(1)
         # M_new_row = torch.cat([new_col, M_new[1, :, 1:]], dim=1)
         # M_new = torch.stack([M_new[0], M_new_row], dim=0)
 
-        M_new = F.pad( M_new[:, 1:], (0,0,1,0) ) #pad for South, fast by 20%
+        M_new[1] = F.pad( M_new[1, :, 1:], (1,0,0,0) ) #pad for South, fast by 20%
     
     elif obc_u2d[1] == 'Rad':
         ubar_s_list = []
@@ -652,14 +653,10 @@ def bcond_u2D_torch(H, Z, M, D_M, z_w, z_e, params):
         M_new = torch.stack([M_new[0], M_new_row], dim=0)
     
     elif obc_u2d[3] == 'Gra':
-        new_col = M_new[1][:, Ny-2:Ny-1].clone()
-        left_cols = M_new[1][:, :Ny-2]
-        right_cols = M_new[1][:, Ny-1:]
-        M_new_row = torch.cat([left_cols, new_col, right_cols], dim=1)
-        M_new = torch.stack([M_new[0], M_new_row], dim=0)
-    
+        M_new[1] = F.pad( M_new[1:2, :, :-1], (0,1,0,0), mode='replicate') #pad for North, fast by 20%
+
     elif obc_u2d[3] == 'Clo':
-        M_new = F.pad( M_new[:, :-1], (0,0,0,1) ) #pad for North, fast by 20%
+        M_new[1] = F.pad( M_new[1, :, :-1], (0,1,0,0) ) #pad for North, fast by 20%
     
     elif obc_u2d[3] == 'Rad':
         ubar_n_list = []
@@ -690,10 +687,12 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
               obc_v2d 顺序为 [W, S, E, N]
     """
     obc_v2d = Params.obc_v2d
-    Nx, Ny = H.shape[1], H.shape[2]  # 注意：N 的空间尺寸一般为 (Nx+1, Ny)
-    
-    # 复制一份 N，后续所有更新都在 N_new 上进行（非就地操作）
-    N_new = N[1].clone()
+    if H.ndim == 3:
+        Nx, Ny = H.shape[1], H.shape[2]  # 注意：N 的空间尺寸一般为 (Nx+1, Ny)
+        N_new = N.clone()
+    else: # H.ndim==2
+        Nx, Ny = H.shape[0], H.shape[1]
+        N_new = N.clone()
     
     # ---------------------------
     # 西侧边界更新 —— 对应 N_new[1, 0, :] （横向第 0 行）
@@ -718,13 +717,10 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], N1_updated], dim=0)
         
     elif obc_v2d[0] == 'Gra':
-        new_row = N_new[1, 1, :].clone().unsqueeze(0)
-        rest    = N_new[1, 1:, :].clone()
-        N1_updated = torch.cat([new_row, rest], dim=0)
-        N_new = torch.stack([N_new[0], N1_updated], dim=0)
+        N_new[1] = F.pad( N_new[1:2, 1:], (0,0,1,0), mode='replicate') #pad for West
         
     elif obc_v2d[0] == 'Clo':
-        N_new = F.pad( N_new[1:], (1,0,0,0) ) #pad for West
+        N_new[1] = F.pad( N_new[1, 1:], (0,0,1,0) ) #pad for West
         
     elif obc_v2d[0] == 'Rad':
         vbar_w_list = []
@@ -762,14 +758,10 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], N1_updated], dim=0)
         
     elif obc_v2d[2] == 'Gra':
-        new_row = N_new[1][Nx - 2, :].clone().unsqueeze(0)
-        rest = N_new[1][:Nx - 2, :].clone()
-        extra = N_new[1][Nx - 1:, :].clone()
-        N1_updated = torch.cat([rest, new_row, extra], dim=0)
-        N_new = torch.stack([N_new[0], N1_updated], dim=0)
+        N_new[1] = F.pad( N_new[1:2, :-1], (0,0,0,1), mode='replicate') #pad for East
         
     elif obc_v2d[2] == 'Clo':
-        N_new = F.pad( N_new[:-1], (0,1,0,0) ) #pad for West
+        N_new[1] = F.pad( N_new[1, :-1], (0,0,0,1) ) #pad for East
         
     elif obc_v2d[2] == 'Rad':
         vbar_e_list = []
@@ -817,12 +809,10 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], new_matrix], dim=0)
         
     elif obc_v2d[1] == 'Gra':
-        new_matrix = N_new[1].clone()
-        new_matrix[:, 0] = new_matrix[:, 1]
-        N_new = torch.stack([N_new[0], new_matrix], dim=0)
+        N_new[1] = F.pad( N_new[1:2, :, 1:], (1,0,0,0), mode='replicate') #pad for South, fast by 20%
         
     elif obc_v2d[1] == 'Clo':
-        N_new = F.pad( N_new[:, 1:], (0,0,1,0) ) #pad for South, fast by 20%
+        N_new[1] = F.pad( N_new[1, :, 1:], (1,0,0,0) ) #pad for South, fast by 20%
         
     elif obc_v2d[1] == 'Rad':
         vbar_s_list = []
@@ -857,12 +847,10 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], new_matrix], dim=0)
         
     elif obc_v2d[3] == 'Gra':
-        new_matrix = N_new[1].clone()
-        new_matrix[:, Ny-2] = new_matrix[:, Ny-3]
-        N_new = torch.stack([N_new[0], new_matrix], dim=0)
+        N_new[1] = F.pad( N_new[1:2, :, :-1], (0,1,0,0), mode='replicate') #pad for North, fast by 20%
         
     elif obc_v2d[3] == 'Clo':
-        N_new = F.pad( N_new[:, :-1], (0,0,0,1) ) #pad for North, fast by 20%
+        N_new[1] = F.pad( N_new[1, :, :-1], (0,1,0,0) ) #pad for North, fast by 20%
         
     elif obc_v2d[3] == 'Rad':
         vbar_n_list = []
@@ -896,27 +884,32 @@ def plot_stage_Point(var2plot, x_ind):
     fig.savefig("Stage_Rad" + f"{x_ind}" + ".jpg", format='jpg', dpi=300, bbox_inches='tight')
     plt.close()
 
+def Z_slope(X,Y):
+    hmax = 100.0  # 离岸水深（米）
+    hmin = 1.0   # 近岸水深（米）
+    x_start = 200000.0  # 斜坡过渡带长度（公里）
+       
+    # 线性过渡公式（自动截断在[1, 100]米范围内）
+    Z = hmax - (X - x_start ) / (x.max() - x_start) * ( hmax - hmin )
+    Z[Z>100] = 100
+    return Z
 
 if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(device)
+    #print(device)
     params = Params(device)
 
     # 读取 eta 数据
     ds_eta = xr.open_dataset('out_eta.nc')
-    eta = ds_eta['eta']  # 或者直接使用 ds_eta.eta
+    eta_array = ds_eta['eta'].values  # 或者直接使用 ds_eta.eta
     
     # 读取 u 数据
     ds_u = xr.open_dataset('out_u.nc')
-    u = ds_u['u']  # 或者直接使用 ds_u.u
+    u_array = ds_u['u'].values  # 或者直接使用 ds_u.u
     
     # 读取 v 数据
     ds_v = xr.open_dataset('out_v.nc')
-    v = ds_v['v']  # 或者直接使用 ds_v.v
-
-    eta_array = eta.values
-    u_array = u.values
-    v_array = v.values
+    v_array = ds_v['v'].values  # 或者直接使用 ds_v.v
  
     dt = params.dt
     NT = params.NT
@@ -933,7 +926,7 @@ if __name__ == '__main__':
     N = torch.zeros((2, params.Nx+1, params.Ny))
     H = torch.zeros((2, params.Nx+1, params.Ny+1))
     # 确保将 params.depth 转移到正确的设备上
-    Z = torch.ones((params.Nx + 1, params.Ny + 1), device=device) * params.depth.to(device)
+    Z = Z_slope(X,Y).to(device)
     # H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
     #
     Wx,Wy,Pa = generate_wind(X,Y,params)
@@ -944,14 +937,10 @@ if __name__ == '__main__':
     # Wx = torch.from_numpy(Wx)
     # Wy = torch.from_numpy(Wy)
     # Pa = Wx * 0 + 1000
-    X = np.stack([eta_array, u_array, v_array], axis=1)  
-    Y = manning_array          
     
-    num_total_steps = X.shape[0]
-    num_time_steps_train = 200    
-    
-    X_tensor = torch.tensor(X, dtype=torch.float32)
-    Y_tensor = torch.tensor(Y, dtype=torch.float32)
+    num_time_steps_train = 200        
+    X_tensor = torch.tensor(np.stack([eta_array, u_array, v_array], axis=1), dtype=torch.float32)
+    Y_tensor = torch.tensor(manning_array, dtype=torch.float32)
     eta_array = torch.tensor(eta_array, dtype=torch.float32)
     
     input_channel = 3
@@ -982,20 +971,23 @@ if __name__ == '__main__':
         H = torch.zeros((2, params.Nx+1, params.Ny+1)).clone().detach().requires_grad_(True).to(device)
         M = torch.zeros((2, params.Nx, params.Ny+1)).clone().detach().requires_grad_(True).to(device)
         N = torch.zeros((2, params.Nx+1, params.Ny)).clone().detach().requires_grad_(True).to(device)
-    
+
         for t in range(params.NT):
             current_input = X_tensor[t].unsqueeze(0).to(device).float()
             manning = model(current_input).squeeze(0)
-    
+            
+            
             H_update = mass_cartesian_torch(H, Z, M, N, params)
             M_update, N_update = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[t], Wy[t], Pa[t], params, manning)
-            # scale = 1000
+
+            scale = 1
             # loss_t = criterion(H_update[1] * scale, eta_array[t].to(device) * scale)
-            loss_t = criterion(H_update[1], eta_array[t].to(device))
+            loss_t = criterion(H_update[1] * scale, eta_array[t].to(device))
             acc_loss += loss_t
 
     
             if (t + 1) % chunk_size == 0 or (t == num_time_steps_train - 1):
+                print('Backward and update the net')
                 optimizer.zero_grad()
                 acc_loss.backward()
                 optimizer.step()
@@ -1007,13 +999,14 @@ if __name__ == '__main__':
                 N = torch.stack((N_update[1].clone(), N_update[1].clone()), dim=0).detach().requires_grad_(True).to(device)
                 acc_loss = 0.0
             else:
+                print('Stack simulation')
                 H = torch.stack((H_update[1].clone(), H_update[1].clone()), dim=0)
                 M = torch.stack((M_update[1].clone(), M_update[1].clone()), dim=0)
                 N = torch.stack((N_update[1].clone(), N_update[1].clone()), dim=0)
     
             if epoch == num_epochs - 1:
                 # 记录变量
-                eta_list.append(dd(H_update[1]))  # 假设 dd() 是某种处理函数
+                eta_list.append(dd(H_update[1]))
                 u_list.append(dd(M_update[1]))
                 v_list.append(dd(N_update[1]))
                 manning_list.append(manning.detach().cpu().numpy())
