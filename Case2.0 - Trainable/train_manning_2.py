@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 from All_params import Params_small,Params_large,Params_tsunami                                            
-from dynamics import mass_cartesian_torch, momentum_nonlinear_cartesian_test,momentum_nonlinear_cartesian_torch
+from dynamics import mass_cartesian_torch,momentum_nonlinear_cartesian_torch
 import torch.nn as nn
 import torch.optim as optim
 from CNN_manning_diff import CNN1
@@ -104,8 +104,8 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 torch.autograd.set_detect_anomaly(True)
 
 # 优化后的训练循环：直接利用整个训练序列（X_tensor）进行多步模拟
-num_epochs = 3
-chunk_size = 1  # 每隔多少步反传一次
+num_epochs = 200
+chunk_size = 20  # 每隔多少步反传一次
 eta_list = []
 u_list = []
 v_list = []
@@ -115,21 +115,23 @@ Fx_list = []
 Fy_list = []
 loss_list = []
 
-
-manning = torch.rand((params.Nx+1, params.Ny+1)).requires_grad_(True).to(device)
+loss = torch.tensor([1])
+#manning = torch.rand((params.Nx+1, params.Ny+1)).requires_grad_(True).to(device)
 for epoch in range(num_epochs):
     model.train()
-    running_loss = 0.0
-    acc_loss = 0.0      # 累计 chunk 内 loss
+    
+    #running_loss = 0.0
+    #acc_loss = 0.0      # 累计 chunk 内 loss
     # 训练数据也需要转移到 GPU
     H_train = list()
     M_train = list()
     N_train = list()
 
     for t in range(params.NT):
-        print(t)
-        #current_input = X_tensor[t].unsqueeze(0).to(device).float()
-        #manning = model(current_input).squeeze(0).squeeze(0)
+        #print(t)
+        current_input = X_tensor[t].unsqueeze(0).to(device).float()
+        manning = model(current_input).squeeze(0).squeeze(0)
+        
         H_update = mass_cartesian_torch(H, Z, M, N, params)
         M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[t], Wy[t], Pa[t], params, manning)
         
@@ -141,27 +143,39 @@ for epoch in range(num_epochs):
         if (t + 1) % chunk_size == 0:
 
             loss_u = criterion(torch.stack(M_train), u_array[t-chunk_size+1:t+1,:-1].to(device))
+            loss_v = criterion(torch.stack(N_train), v_array[t-chunk_size+1:t+1,:,:-1].to(device))
+            
+            loss = loss_u + loss_v
             #loss_h = criterion(torch.stack(H_train), eta_array[t-chunk_size+1:t+1].to(device))
-            print('generate graph')
+            #print('generate graph')
             #graph_cal = make_dot(loss_u) 
             #graph_cal.render(filename = 'one-net', view = False, format = 'pdf')
 
             optimizer.zero_grad()
-            with torch.autograd.detect_anomaly():  # 启用详细错误检测
-                loss_u.backward()
+            #with torch.autograd.detect_anomaly():  # 启用详细错误检测
+            loss.backward()
             optimizer.step()       
-            print('finish step')
+            #print('finish step')
             # 训练之后，重启训练矩阵
             running_loss = 0.0
             acc_loss = 0.0    # 累计 chunk 内 loss
             H_train = list()
             M_train = list()
             N_train = list()
+            # re-initialize, now we need step t at dim=1, so we choose t-1 and t
+            H = eta_array[t-1:t+1].to(device)  
+            M = u_array[t-1:t+1,:-1].to(device)
+            N = v_array[t-1:t+1,:,:-1].to(device)
 
         # 更新 H, M, N 的状态训练之后
         H[0] = H_update[1].detach()
         M[0] = M_update[1].detach()
         N[0] = N_update[1].detach()
+        #pcolor(dd(manning),vmin=0,vmax=.2);colorbar();show()
+        
+        avg_train_loss = loss.item()
+        train_loss_history.append(avg_train_loss)
+        print(f"Epoch {epoch+1+t/NT:.2f}/{num_epochs}, Train Loss: {avg_train_loss:.15f}")
         
         if epoch == num_epochs - 1:
             # 记录变量
@@ -187,7 +201,5 @@ for epoch in range(num_epochs):
             torch.save(model.state_dict(), 'model_checkpoint_manning.pth')
             
             print("Training complete and data saved.")
+    
 
-    avg_train_loss = running_loss
-    train_loss_history.append(avg_train_loss)
-    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.15f}")
