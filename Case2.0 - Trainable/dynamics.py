@@ -167,37 +167,32 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     # Nu is applied here and in the friction below
     N_exp = torch.cat( (N[0,:,0:1], N[0], N[0,:,-1:]), dim = 1)
     Nu = rho2u(v2rho(N_exp))   #at u-point
-    # Nu = F.pad( rho2u(rho2v(N[0])) , (1,1))
-    # Torch
-    phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
-    M_val = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
-            + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
-            - CC1 * ududx                                  #u advection
-            - CC2 * vdudy                                  #v advection
-            - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x)         #pgf
     
-    #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
-    #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
-    
-    mask_fs999_M = (flux_sign_M == 999)
-    M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
     # 底摩擦
+    mask_fs999_M = (flux_sign_M == 999)
+    #M_val = torch.where(mask_fs999_M, torch.zeros_like(M_val), M_val)
+    #by LWF
     friction_mask = (D0 > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_u = Cf[:-1,:]                
-
+    Cf_u = rho2u(manning)
     #Nu was generated before
     Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
-    
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     # Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(torch.clamp(m0**2 + Nu**2, min=epsilon)) * m0
     # Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
     # Fx = torch.where(friction_mask, Fx, torch.zeros_like(Fx))
-    M_val = M_val - dt * Fx
-
-
-    M_new = M.clone()
-    M_new[1,1:-1,1:-1] = M_val[1:-1,1:-1]
+        
+    phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
+    M_new = M.clone().detach() #by LWF    
+    M_new[1] = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
+            + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
+            - CC1 * ududx                                  #u advection
+            - CC2 * vdudy                                  #v advection
+            - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x        #pgf
+            - dt  * Fx)                                    #friction
+    
+    #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
+    #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
 
     # ========== N 分量 (Nx, Ny-1) ==========
     n0 = N[0].clone().detach()
@@ -233,29 +228,26 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     M_exp = torch.cat( (M[0,0:1],M[0], M[0,-1:]), dim =0)
     Mv = rho2u(v2rho(M_exp)) #at v-point, [ 1 ~ Nx-1, 1 ~ Ny-1]
     #Mv = F.pad( rho2u(rho2v( M[0])) , (0,0,1,1)) #pad for up and down
-    phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
-    N_val = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
-            + dt * (svstr - f_cor * Mv )
-            - CC1 * udvdx
-            - CC2 * vdvdy
-            - (CC4 * D0N * (h2u_N - h1u_N) + Pre_grad_y))
-      
-    mask_fs999_N = (flux_sign_N == 999)
-    N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
     #底摩擦
+    mask_fs999_N = (flux_sign_N == 999)
+    #N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
     friction_maskN = (D0N > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_v = Cf[:, :-1]
+    Cf_v = rho2v(Cf)
     Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(Mv**2 + n0**2) * n0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     #Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(torch.clamp(Mv**2 + n0**2, min=epsilon)) * n0
     #Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
     #Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
-    #
-    N_val = N_val - dt * Fy
-    
-    N_new = N.clone()
-    N_new[1,1:-1,1:-1] = N_val[1:-1,1:-1]
+    # 
+    N_new = N.detach() #by LWF
+    phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
+    N_new[1] = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
+            + dt * (svstr - f_cor * Mv )
+            - CC1 * udvdx
+            - CC2 * vdvdy
+            - CC4 * D0N * (h2u_N - h1u_N) + Pre_grad_y
+            - dt * Fy )
     #pcolor(rho2v(X)[1:-1,1:-1],rho2v(Y)[1:-1,1:-1],N_val[1:-1,1:-1]/D_N[1:-1,1:-1]);colorbar();show()
     
     # apply boundary condition

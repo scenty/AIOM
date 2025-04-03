@@ -105,7 +105,7 @@ torch.autograd.set_detect_anomaly(True)
 
 # 优化后的训练循环：直接利用整个训练序列（X_tensor）进行多步模拟
 num_epochs = 200
-chunk_size = 20  # 每隔多少步反传一次
+chunk_size = 1  # 每隔多少步反传一次
 eta_list = []
 u_list = []
 v_list = []
@@ -148,8 +148,8 @@ for epoch in range(num_epochs):
             loss = loss_u + loss_v
             #loss_h = criterion(torch.stack(H_train), eta_array[t-chunk_size+1:t+1].to(device))
             #print('generate graph')
-            #graph_cal = make_dot(loss_u) 
-            #graph_cal.render(filename = 'one-net', view = False, format = 'pdf')
+            graph_cal = make_dot(loss) 
+            graph_cal.render(filename = 'one-net', view = False, format = 'pdf')
 
             optimizer.zero_grad()
             #with torch.autograd.detect_anomaly():  # 启用详细错误检测
@@ -163,9 +163,10 @@ for epoch in range(num_epochs):
             M_train = list()
             N_train = list()
             # re-initialize, now we need step t at dim=1, so we choose t-1 and t
-            H = eta_array[t-1:t+1].to(device)  
-            M = u_array[t-1:t+1,:-1].to(device)
-            N = v_array[t-1:t+1,:,:-1].to(device)
+            
+            H = eta_array[t:t+1].repeat(2,1,1).to(device)
+            M = u_array[t:t+1,:-1].repeat(2,1,1).to(device)
+            N = v_array[t:t+1,:,:-1].repeat(2,1,1).to(device)
 
         # 更新 H, M, N 的状态训练之后
         H[0] = H_update[1].detach()
