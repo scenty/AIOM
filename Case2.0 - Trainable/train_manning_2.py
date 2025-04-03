@@ -126,10 +126,9 @@ for epoch in range(num_epochs):
     H_train = list()
     M_train = list()
     N_train = list()
-
+    current_input = X_tensor[0].unsqueeze(0).to(device).float()
     for t in range(params.NT):
         #print(t)
-        current_input = X_tensor[t].unsqueeze(0).to(device).float()
         manning = model(current_input).squeeze(0).squeeze(0)
         
         H_update = mass_cartesian_torch(H, Z, M, N, params)
@@ -148,8 +147,8 @@ for epoch in range(num_epochs):
             loss = loss_u + loss_v
             #loss_h = criterion(torch.stack(H_train), eta_array[t-chunk_size+1:t+1].to(device))
             #print('generate graph')
-            graph_cal = make_dot(loss) 
-            graph_cal.render(filename = 'one-net', view = False, format = 'pdf')
+            # graph_cal = make_dot(loss) 
+            # graph_cal.render(filename = 'one-net', view = False, format = 'pdf')
 
             optimizer.zero_grad()
             #with torch.autograd.detect_anomaly():  # 启用详细错误检测
@@ -173,7 +172,14 @@ for epoch in range(num_epochs):
         M[0] = M_update[1].detach()
         N[0] = N_update[1].detach()
         #pcolor(dd(manning),vmin=0,vmax=.2);colorbar();show()
+        # 对于 M_update[1]：原尺寸 (100, 51) 需要变为 (101, 51)
+        M_resized = torch.cat([M_update[1], M_update[1][-1:].clone()], dim=0)
+        # 对于 N_update[1]：原尺寸 (101, 50) 需要变为 (101, 51)
+        N_resized = torch.cat([N_update[1], N_update[1][:, -1:].clone()], dim=1)
         
+        # 将 H_update[1]、M_resized 和 N_resized 堆叠成新的 current_state
+        current_state = torch.stack([H_update[1], M_resized, N_resized], dim=0)
+        current_input = current_state.unsqueeze(0)
         avg_train_loss = loss.item()
         train_loss_history.append(avg_train_loss)
         print(f"Epoch {epoch+1+t/NT:.2f}/{num_epochs}, Train Loss: {avg_train_loss:.15f}")
