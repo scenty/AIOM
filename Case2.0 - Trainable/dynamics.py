@@ -121,7 +121,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     g = params.g
     MinWaterDepth = params.MinWaterDepth
     FrictionDepthLimit = params.FrictionDepthLimit
-    Cf = manning
+    Cf = manning/10
     dt = params.dt
     phi = params.centerWeighting0
     Nx = params.Nx
@@ -174,7 +174,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     #by LWF
     friction_mask = (D0 > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_u = rho2u(manning)
+    Cf_u = rho2u(manning/10)
     #Nu was generated before
     Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
