@@ -110,12 +110,12 @@ input_channel = 3
 model = CNN1(shapeX=input_channel).to(device)
 model.float()  
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.0003)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 torch.autograd.set_detect_anomaly(True)
 
 # 优化后的训练循环：直接利用整个训练序列（X_tensor）进行多步模拟
-num_epochs = 200
+num_epochs = 100
 eta_list = []
 u_list = []
 v_list = []
@@ -126,49 +126,58 @@ Fy_list = []
 loss_list = []
 
 #manning = torch.rand((params.Nx+1, params.Ny+1)).requires_grad_(True).to(device)
+last_epoch_H_list = []
+last_epoch_M_list = []
+last_epoch_N_list = []
+last_epoch_manning_list = []
+
 for epoch in range(num_epochs):
     model.train()
     
-    epoch_loss_sum = 0.0  # 用于累加当前 epoch 内所有时间步的 loss
-    H_train = list()
-    M_train = list()
-    N_train = list()
+    epoch_loss_sum = 0.0  # 累加当前 epoch 内所有时间步的 loss
     current_input = X_tensor[0].unsqueeze(0).to(device).float()
+    
+    # 重新初始化状态，每个 epoch 内从零开始
     M = torch.zeros((2, params.Nx, params.Ny+1)).to(device)
     N = torch.zeros((2, params.Nx+1, params.Ny)).to(device)
     H = torch.zeros((2, params.Nx+1, params.Ny+1)).to(device)
+    
     for t in range(params.NT):
         # 保存当前时间步的初始状态
         H_init = H.clone()
         M_init = M.clone()
         N_init = N.clone()
-        inner_steps = 20
+        inner_steps = 10
+        
+        # 内循环：重复 inner_steps 次进行前向传播和反向传播
         for i in range(inner_steps):
-            # 使用固定的初始状态 H_init, M_init, N_init 进行前向传播
             manning = model(current_input).squeeze(0).squeeze(0)
             H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
             M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(
                 H_update, Z, M_init, N_init, Wx[t], Wy[t], Pa[t], params, manning)
             
-            # 计算 loss，这里确保输入和目标尺寸匹配
-            loss_eta = criterion(H_update[1], eta_array[t].to(device))
-            loss_u = criterion(M_update[1], u_array[t].to(device))
-            loss_v = criterion(N_update[1], v_array[t].to(device))
+            scale = 100
+            loss_eta = criterion(H_update[1]* scale, eta_array[t].to(device)* scale)
+            loss_u = criterion(M_update[1]* scale, u_array[t].to(device)* scale)
+            loss_v = criterion(N_update[1]* scale, v_array[t].to(device)* scale)
+
             loss = loss_eta + loss_u + loss_v
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         
-        # 更新状态，构造新的 current_input
+        # 用最新的模型参数计算一次更新（不进行梯度更新）
         H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
         M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(
             H_update, Z, M_init, N_init, Wx[t], Wy[t], Pa[t], params, manning)
         
+        # 更新状态，用于下一个时间步
         H[0] = H_update[1].detach()
         M[0] = M_update[1].detach()
         N[0] = N_update[1].detach()
         
+        # 对 M_update、N_update 做插值（保证与 H_update 一致）
         target_size = H_update[1].shape
         M_resized = F.interpolate(M_update[1].unsqueeze(0).unsqueeze(0),
                                   size=target_size, mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
@@ -177,31 +186,34 @@ for epoch in range(num_epochs):
         current_state = torch.stack([H[0], M_resized, N_resized], dim=0)
         current_input = current_state.unsqueeze(0).detach()
         
-        # 累加当前时间步的 loss
-        epoch_loss_sum += loss.item()
+        # 计算当前时间步的最终 loss（用最新的状态 H_update、M_update、N_update 计算）
+        scale = 100
+        final_loss_eta = criterion(H_update[1]* scale, eta_array[t].to(device)* scale)
+        final_loss_u = criterion(M_update[1]* scale, u_array[t].to(device)* scale)
+        final_loss_v = criterion(N_update[1]* scale, v_array[t].to(device)* scale)
+        final_loss = final_loss_eta + final_loss_u + final_loss_v
+        epoch_loss_sum += final_loss.item()
         
+        # 如果是最后一个 epoch，则保存每个时间步的最终状态和 loss
         if epoch == num_epochs - 1:
-            # 记录变量（只在最后一个 epoch 记录）
-            eta_list.append(dd(H_update[1]))
-            u_list.append(dd(M_update[1]))
-            v_list.append(dd(N_update[1]))
-            manning_list.append(manning.detach().cpu().numpy())
-            Fx_list.append(Fx.detach().cpu().numpy())
-            Fy_list.append(Fy.detach().cpu().numpy())
-            
-            np.save('eta_list_train_manning.npy', np.array(eta_list))
-            np.save('u_list_train_manning.npy', np.array(u_list))
-            np.save('v_list_train_manning.npy', np.array(v_list))
-            np.save('manning_list_train.npy', np.array(manning_list))
-            np.save('Fx_list_train_manning.npy', np.array(Fx_list))
-            np.save('Fy_list_train_manning.npy', np.array(Fy_list))
+            last_epoch_H_list.append(dd(H_update[1]))
+            last_epoch_M_list.append(dd(M_update[1]))
+            last_epoch_N_list.append(dd(N_update[1]))
+            last_epoch_manning_list.append(dd(manning))
     
-    # 计算该 epoch 内所有时间步的平均 loss，并保存
+    # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
     epoch_avg_loss = epoch_loss_sum / params.NT
-    train_loss_history.append(epoch_avg_loss)
+    train_loss_history.append(epoch_avg_loss.cpu().item())
+
     print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_avg_loss:.15f}")
 
-# 保存整个训练的平均 loss 历史
+# 保存最后一个 epoch 的每个时间步状态和 loss
+np.save('eta_list_train_manning.npy', np.array(last_epoch_H_list))
+np.save('u_list_train_manning.npy', np.array(last_epoch_M_list))
+np.save('v_list_train_manning.npy', np.array(last_epoch_N_list))
+last_epoch_manning_list
+np.save('manning_list_train_manning.npy', np.array(last_epoch_manning_list))
+# 保存整个 epoch 平均 loss 历史
 np.save('train_loss_history_manning.npy', np.array(train_loss_history))
 torch.save(model.state_dict(), 'model_checkpoint_manning.pth')
 print("Training complete and data saved.")

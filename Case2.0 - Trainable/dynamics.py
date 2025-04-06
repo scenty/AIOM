@@ -78,7 +78,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     #H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
     
     H_new = torch.stack((H0, H1), dim=0)
-    #H_new = bcond_zeta_torch(H_new, Z, params)
+    H_new = bcond_zeta_torch(H_new, Z, params)
     
     assert not torch.any(torch.isnan(H_new))
     
@@ -256,8 +256,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     z_n = 0
     z_s = 0
     #TODO check       
-    #M_new = bcond_u2D_torch(H, Z, M_new, D_M, z_w, z_e, params)
-    #N_new = bcond_v2D_torch(H, Z, N_new, D_N, z_s, z_n, params)
+    M_new = bcond_u2D_torch(H, Z, M_new, D_M, z_w, z_e, params)
+    N_new = bcond_v2D_torch(H, Z, N_new, D_N, z_s, z_n, params)
     assert not torch.any(torch.isnan(M_new))
     assert not torch.any(torch.isnan(N_new))
     
