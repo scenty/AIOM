@@ -28,9 +28,9 @@ class Params_large:
         self.centerWeighting0 = torch.tensor(0.9998, device=device)
 
         # Boundary conditions
-        self.obc_ele = ['Rad', 'Rad', 'Rad', 'Rad']
-        self.obc_u2d = ['Rad', 'Rad', 'Rad', 'Rad'] 
-        self.obc_v2d = ['Rad', 'Rad', 'Rad', 'Rad']
+        self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
+        self.obc_u2d = ['Clo', 'Clo', 'Clo', 'Clo'] 
+        self.obc_v2d = ['Clo', 'Clo', 'Clo', 'Clo']
 
         # Temporary variables
         self.CC1 = self.dt / self.dx

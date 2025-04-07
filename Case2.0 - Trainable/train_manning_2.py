@@ -19,6 +19,13 @@ import torch
 import time  # 在文件头部导入
 #from radam import RAdam  # 或 pip install radam，具体看第三方库
 # from torchviz import make_dot      
+def tic():
+    global _start_time
+    _start_time = time.time()
+
+def toc():
+    elapsed_time = time.time() - _start_time
+    print(f"Elapsed time: {elapsed_time:.4f} seconds")
 
 
 def plot_stage_Point(var2plot, x_ind):
@@ -43,8 +50,8 @@ def plot_stage_Point(var2plot, x_ind):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 
-case = 'small'
-params = Params_small(device)
+case = 'large'
+exec(f'params = Params_{case}(device)')
 
 
 # 读取 eta 数据
@@ -67,7 +74,7 @@ y = torch.linspace(0, params.Ly, params.Ny + 1)
 X, Y = torch.meshgrid(x, y)
 X = X.to(device)
 Y = Y.to(device)
-manning_distribution = np.load('manning_small_distribution.npy')
+manning_distribution = np.load(f'manning_{case}_distribution.npy')
 manning_array = manning_distribution[np.newaxis,:,:].repeat(NT.cpu(), axis=0)
 
 # initial condition
@@ -106,6 +113,7 @@ eta_array = torch.tensor(eta_array, dtype=torch.float32)
 u_array = torch.tensor(u_array, dtype=torch.float32)
 v_array = torch.tensor(v_array, dtype=torch.float32)
 
+#%%
 input_channel = 3
 model = CNN1(shapeX=input_channel).to(device)
 model.float()  
@@ -115,7 +123,9 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 torch.autograd.set_detect_anomaly(True)
 
 # 优化后的训练循环：直接利用整个训练序列（X_tensor）进行多步模拟
-num_epochs = 100
+num_epochs = 10
+inner_steps = 10
+params.NT = 50 ##### overall time = num_epochs * inner_steps * NT5000*
 eta_list = []
 u_list = []
 v_list = []
@@ -125,6 +135,7 @@ Fx_list = []
 Fy_list = []
 loss_list = []
 
+
 #manning = torch.rand((params.Nx+1, params.Ny+1)).requires_grad_(True).to(device)
 last_epoch_H_list = []
 last_epoch_M_list = []
@@ -133,7 +144,7 @@ last_epoch_manning_list = []
 
 for epoch in range(num_epochs):
     model.train()
-    
+    #print(f'Start Training {epoch}/{num_epochs}')
     epoch_loss_sum = 0.0  # 累加当前 epoch 内所有时间步的 loss
     current_input = X_tensor[0].unsqueeze(0).to(device).float()
     
@@ -142,21 +153,23 @@ for epoch in range(num_epochs):
     N = torch.zeros((2, params.Nx+1, params.Ny)).to(device)
     H = torch.zeros((2, params.Nx+1, params.Ny+1)).to(device)
     
-    for t in range(params.NT):
+    for t in range(20):#params.NT
         # 保存当前时间步的初始状态
         H_init = H.clone()
         M_init = M.clone()
         N_init = N.clone()
-        inner_steps = 10
+        
         
         # 内循环：重复 inner_steps 次进行前向传播和反向传播
         for i in range(inner_steps):
+            #print(i)
+            #tic()
             manning = model(current_input).squeeze(0).squeeze(0)
             H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
             M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(
                 H_update, Z, M_init, N_init, Wx[t], Wy[t], Pa[t], params, manning)
             
-            scale = 100
+            scale = 1
             loss_eta = criterion(H_update[1]* scale, eta_array[t].to(device)* scale)
             loss_u = criterion(M_update[1]* scale, u_array[t].to(device)* scale)
             loss_v = criterion(N_update[1]* scale, v_array[t].to(device)* scale)
@@ -166,6 +179,8 @@ for epoch in range(num_epochs):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            #toc()
+            #print(f"Inner loop")
         
         # 用最新的模型参数计算一次更新（不进行梯度更新）
         H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
@@ -187,12 +202,14 @@ for epoch in range(num_epochs):
         current_input = current_state.unsqueeze(0).detach()
         
         # 计算当前时间步的最终 loss（用最新的状态 H_update、M_update、N_update 计算）
-        scale = 100
+        
         final_loss_eta = criterion(H_update[1]* scale, eta_array[t].to(device)* scale)
         final_loss_u = criterion(M_update[1]* scale, u_array[t].to(device)* scale)
         final_loss_v = criterion(N_update[1]* scale, v_array[t].to(device)* scale)
         final_loss = final_loss_eta + final_loss_u + final_loss_v
         epoch_loss_sum += final_loss.item()
+        
+        print(f"Epoch { (epoch+1+ t/20) :.2f}/{num_epochs}, Train Loss: {epoch_loss_sum:.5e}")
         
         # 如果是最后一个 epoch，则保存每个时间步的最终状态和 loss
         if epoch == num_epochs - 1:
@@ -203,9 +220,9 @@ for epoch in range(num_epochs):
     
     # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
     epoch_avg_loss = epoch_loss_sum / params.NT
-    train_loss_history.append(epoch_avg_loss.cpu().item())
+    train_loss_history.append(epoch_avg_loss)
 
-    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_avg_loss:.15f}")
+    print(f"Epoch {epoch+1} Finish, Train Loss: {epoch_avg_loss:.5e}")
 
 # 保存最后一个 epoch 的每个时间步状态和 loss
 np.save('eta_list_train_manning.npy', np.array(last_epoch_H_list))
