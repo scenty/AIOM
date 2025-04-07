@@ -17,6 +17,15 @@ file_path = r"tsunami_deformation.xlsx"
 
 df = pd.read_excel(file_path)
 lon, lat, z = df.iloc[:,0], df.iloc[:,1], df.iloc[:,4]  # 假设前3列是lon,lat,z
+mat_data = {
+    'lon':lon,  # 确保是numpy数组
+    'lat':lat,    # 确保是numpy数组
+    'z': z,
+}
+
+# 保存为.mat文件
+import scipy.io as sio
+sio.savemat('tsunami_initial.mat', mat_data)
 
 # 2. 插值到网格
 lon_grid = np.arange(lon.min(), lon.max()+grid_resolution, grid_resolution)
@@ -31,7 +40,7 @@ ax = fig.add_subplot(111, projection=proj)
 
 ax.add_feature(cfeature.LAND, facecolor='lightgray')
 ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
-ax.set_extent([100, 180, -50, 50])
+#ax.set_extent([100, 180, -50, 50])
 # 4. 绘制数据
 contour = ax.contourf(lon_grid, lat_grid, z_grid, levels=20, cmap='coolwarm')
 plt.colorbar(contour, label='Vertical Displacement (m)')
