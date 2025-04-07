@@ -48,6 +48,7 @@ def plot_stage_Point(var2plot, x_ind):
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cpu'
 print(device)
 
 case = 'large'
@@ -153,7 +154,7 @@ for epoch in range(num_epochs):
     N = torch.zeros((2, params.Nx+1, params.Ny)).to(device)
     H = torch.zeros((2, params.Nx+1, params.Ny+1)).to(device)
     
-    for t in range(20):#params.NT
+    for t in range(params.NT):
         # 保存当前时间步的初始状态
         H_init = H.clone()
         M_init = M.clone()
@@ -209,7 +210,7 @@ for epoch in range(num_epochs):
         final_loss = final_loss_eta + final_loss_u + final_loss_v
         epoch_loss_sum += final_loss.item()
         
-        print(f"Epoch { (epoch+1+ t/20) :.2f}/{num_epochs}, Train Loss: {epoch_loss_sum:.5e}")
+        print(f"Epoch { (epoch+1+ t/params.NT) :.2f}/{num_epochs}, Train Loss: {epoch_loss_sum:.5e}")
         
         # 如果是最后一个 epoch，则保存每个时间步的最终状态和 loss
         if epoch == num_epochs - 1:
@@ -221,7 +222,7 @@ for epoch in range(num_epochs):
     # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
     epoch_avg_loss = epoch_loss_sum / params.NT
     train_loss_history.append(epoch_avg_loss)
-
+    plot(train_loss_history);show()
     print(f"Epoch {epoch+1} Finish, Train Loss: {epoch_avg_loss:.5e}")
 
 # 保存最后一个 epoch 的每个时间步状态和 loss
