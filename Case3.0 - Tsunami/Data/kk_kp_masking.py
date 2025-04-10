@@ -14,78 +14,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import netCDF4 as nc
 import xarray as xr
-    
 
-# 1. 打开原始 NetCDF 文件
-input_file = r"G:\2023storm\git_shallow_water\case3.0\ETOPO1_Ice_c_gdal.nc"
-ds = xr.open_dataset(input_file)
-
-# 检查lat坐标的前几个数值（确保坐标顺序是否符合要求）
-print("lat坐标：", ds['lat'].values[:5])
-
-# 2. 根据经纬度裁剪感兴趣区域
-# 这里假设经度范围为 130°E 至 180°E，纬度范围为 -20° 至 60°（请根据实际数据情况确保lat顺序正确）
-ds_sub = ds.sel(lon=slice(130, 180), lat=slice(-20, 60))
-
-# 3. 构造新的经纬度数组，步长均为 0.25°
-# 注意：使用 np.arange 时，终值可能不被包含，为了确保包含上界，可以设置终点为上界 + 分辨率
-new_lon = np.arange(130, 180 + 1, 1)
-new_lat = np.arange(-20, 60 + 1, 1)
-
-# 4. 对子集数据进行插值处理（使用线性插值）
-ds_interp = ds_sub.interp(lon=new_lon, lat=new_lat, method="linear")
-
-# 5. 保存插值后的数据到新的 NetCDF 文件
-output_interp_file = r"G:\2023storm\git_shallow_water\case3.0\ETOPO1_Ice_c_gdal_subset_interp.nc"
-ds_interp.to_netcdf(output_interp_file)
-print(f"插值后的数据已保存到: {output_interp_file}")
-
-# 6. 绘制插值后的数据
-# 这里假设变量名为 'z'，请根据你的实际变量名称进行调整
-plt.figure(figsize=(8, 12))
-ds_interp['z'].plot(cmap='viridis', robust=True)
-plt.xlabel('Longitude (°E)')
-plt.ylabel('Latitude (°N)')
-plt.title('Subset of ETOPO1 Ice Surface Elevation with 0.25° Resolution')
-plt.show()
-
-# 1. 打开 tsunami_initial.nc 文件
-input_file = r"tsunami_initial.nc"  # 请确保文件路径正确
-ds = xr.open_dataset(input_file)
-
-# 检查纬度坐标顺序（打印前几个值）
-print("lat坐标：", ds['lat'].values[:5])
-
-# 2. 根据经纬度范围裁剪数据（例如经度 130°E 至 180°E，纬度 -20° 至 60°N）
-# 注意：如果实际的坐标顺序与这里假设的不一致（如 lat 为降序），需要调整 slice 参数
-ds_sub = ds.sel(lon=slice(130, 180), lat=slice(-20, 60))
-
-# 3. 构造新的经纬度数组，以 0.25° 为分辨率
-new_lon = np.arange(130, 180 + 1, 1)
-new_lat = np.arange(-20, 60 + 1, 1)
-
-# 4. 对裁剪后的数据进行线性插值
-ds_interp = ds_sub.interp(lon=new_lon, lat=new_lat, method="linear")
-# 5. 用 fillna(0) 将插值后所有的空白值（NaN）填成 0
-ds_interp_filled = ds_interp.fillna(0)
-# 5. 保存插值后的数据到新的 NetCDF 文件
-output_file = r"tsunami_initial_interp.nc"
-ds_interp_filled.to_netcdf(output_file)
-print(f"插值后的数据已保存到: {output_file}")
-
-# 6. 绘制插值后的数据（假设插值变量名为 'z'，请根据实际情况调整）
-plt.figure(figsize=(8, 12))
-ds_interp_filled['z'].plot(cmap='viridis', vmin=-1.5, vmax=1.5)
-
-plt.xlabel('Longitude (°E)')
-plt.ylabel('Latitude (°N)')
-plt.title('Tsunami Initial Condition Interpolated at 0.25° Resolution')
-plt.show()
-
-
-
-
-# 如果用到自定义Shapefile，需要导入 fiona 或 shapely 的其他相关模块
 
 def create_land_mask(lon_grid, lat_grid, shoreline_file=None, resolution='50m'):
     """
@@ -135,9 +64,76 @@ def create_land_mask(lon_grid, lat_grid, shoreline_file=None, resolution='50m'):
 
 # 示例使用流程（注意调整数据加载部分以匹配你的环境）
 if __name__ == "__main__":
+    # 1. 打开原始 NetCDF 文件
+    input_file = r"ETOPO1_Ice_c_gdal.nc"
+    ds = xr.open_dataset(input_file)
 
+    # 检查lat坐标的前几个数值（确保坐标顺序是否符合要求）
+    print("lat坐标：", ds['lat'].values[:5])
+
+    # 2. 根据经纬度裁剪感兴趣区域
+    
+    Lon_min = 120
+    Lon_max = 300
+    Lat_min = -60
+    Lat_max = 60
+    resolution = 1/60
+    # 这里假设经度范围为 130°E 至 180°E，纬度范围为 -20° 至 60°（请根据实际数据情况确保lat顺序正确）
+    ds_sub = ds.sel(lon=slice(Lon_min, Lon_max), lat=slice(Lat_min, Lat_max))
+
+    # 3. 构造新的经纬度数组，步长均为 0.25°
+    # 注意：使用 np.arange 时，终值可能不被包含，为了确保包含上界，可以设置终点为上界 + 分辨率
+    new_lon = np.arange(Lon_min, Lon_max + resolution, resolution)
+    new_lat = np.arange(Lat_min, Lat_max + resolution, resolution)
+
+    # 4. 对子集数据进行插值处理（使用线性插值）
+    ds_interp = ds_sub.interp(lon=new_lon, lat=new_lat, method="linear")
+
+    # 5. 保存插值后的数据到新的 NetCDF 文件
+    output_interp_file = r"ETOPO1_tsunami_large.nc"
+    ds_interp.to_netcdf(output_interp_file)
+    print(f"插值后的数据已保存到: {output_interp_file}")
+
+    # 6. 绘制插值后的数据
+    # 这里假设变量名为 'z'，请根据你的实际变量名称进行调整
+    plt.figure(figsize=(8, 12))
+    ds_interp['z'].plot(cmap='viridis', robust=True)
+    plt.xlabel('Longitude (°E)')
+    plt.ylabel('Latitude (°N)')
+    plt.title('Subset of ETOPO1 Ice Surface Elevation with 0.25° Resolution')
+    plt.show()
+
+    # 1. 打开 tsunami_initial.nc 文件
+    input_file = r"tsunami_initial.nc"  # 请确保文件路径正确
+    ds = xr.open_dataset(input_file)
+
+    # 检查纬度坐标顺序（打印前几个值）
+    print("lat坐标：", ds['lat'].values[:5])
+
+    # 2. 根据经纬度范围裁剪数据（例如经度 130°E 至 180°E，纬度 -20° 至 60°N）
+    # 注意：如果实际的坐标顺序与这里假设的不一致（如 lat 为降序），需要调整 slice 参数
+    ds_sub = ds.sel(lon=slice(130, 180), lat=slice(-20, 60))
+
+    # 4. 对裁剪后的数据进行线性插值
+    ds_interp = ds_sub.interp(lon=new_lon, lat=new_lat, method="linear")
+    # 5. 用 fillna(0) 将插值后所有的空白值（NaN）填成 0
+    ds_interp_filled = ds_interp.fillna(0)
+    # 5. 保存插值后的数据到新的 NetCDF 文件
+    output_file = r"tsunami_initial_interp.nc"
+    ds_interp_filled.to_netcdf(output_file)
+    print(f"插值后的数据已保存到: {output_file}")
+
+    # 6. 绘制插值后的数据（假设插值变量名为 'z'，请根据实际情况调整）
+    plt.figure(figsize=(8, 12))
+    ds_interp_filled['z'].plot(cmap='viridis', vmin=-1.5, vmax=1.5)
+
+    plt.xlabel('Longitude (°E)')
+    plt.ylabel('Latitude (°N)')
+    plt.title('Tsunami Initial Condition Interpolated at 0.25° Resolution')
+    plt.show()
+    
     # 1. 加载数据（这里以ETOPO1_Ice_c_gdal.nc为例）
-    fname = r'G:\2023storm\git_shallow_water\case3.0\ETOPO1_Ice_c_gdal_subset_interp.nc'
+    fname = r'ETOPO1_Ice_c_gdal_subset_interp_large.nc'
     nc_data = nc.Dataset(fname)
     lon = nc_data['lon'][:]
     lat = nc_data['lat'][:]

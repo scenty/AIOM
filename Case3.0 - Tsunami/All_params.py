@@ -1,4 +1,5 @@
 import torch
+import xarray as xr
 
 class Params_large:
     def __init__(self, device):
@@ -100,13 +101,15 @@ class Params_tsunami:
     def __init__(self):
         # ------------------ 新增代码 ------------------
         # 读取 XYZ 数据来确定经纬度网格
-        ds_xyz = xr.open_dataset('ETOPO1_Ice_c_gdal_subset_interp.nc')
+        ds_xyz = xr.open_dataset('Data/ETOPO1_Ice_c_gdal_subset_interp.nc')
         lon = ds_xyz['lon'].values  # 假设单位是度，如果需要转换为物理距离，请根据经纬度转化公式
         lat = ds_xyz['lat'].values
+        self.lon = lon 
+        self.lat = lat
 
         # 这里假定 lon、lat 是一维数组，且是规则网格
-        self.Nx = len(lon) - 1  # 网格点数为维度数-1，如果你希望以点数计算，则直接使用 len(lon)
-        self.Ny = len(lat) - 1
+        self.Nx = len(self.lon) - 1  # 网格点数为维度数-1，如果你希望以点数计算，则直接使用 len(lon)
+        self.Ny = len(self.lat) - 1
 
         # 这里的 Lx, Ly 可以根据经纬度分辨率换算为物理距离（例如：假设1°约111km，或者用更精确的方法）
         # 以下示例仅供参考：
