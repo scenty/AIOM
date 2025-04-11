@@ -13,8 +13,6 @@ from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 from All_params import Params_small,Params_large,Params_tsunami
 from dynamics import mass_cartesian_torch,momentum_nonlinear_cartesian_torch
-
-
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
@@ -23,41 +21,27 @@ device = torch.device('cpu')
 
 dt = params.dt
 NT = params.NT
-# 读取初始水位数据
+# 读取网格
 ds_grid = xr.open_dataset('Data/tsunami_grid_0.1.nc')
-H_ini = torch.from_numpy(ds_grid['zeta'].values.astype(np.float64))
-H_ini = H_ini.T  # 调整为 [51, 81]，与模型网格一致
-# 填充 NaN 值为 0
-H_ini = torch.nan_to_num(H_ini, nan=0.0)
-
+x = torch.from_numpy(ds_grid['lon'][:].values)
+y = torch.from_numpy(ds_grid['lat'][:].values)
+X, Y = torch.meshgrid(x, y, indexing='ij')
+# 地形
 Z = torch.from_numpy(ds_grid['z'].values.astype(np.float64))
 Z = Z.T  # 调整为 [51, 81]
 Z = -torch.nan_to_num(Z, nan=0.0)
 Z[Z<params.dry_limit] = params.dry_limit
 land_mask = torch.from_numpy(ds_grid['mask'].values).T
-
-# --------------------------------------------------
-# x = torch.linspace(0, params.Lx, params.Nx + 1)
-# y = torch.linspace(0, params.Ly, params.Ny + 1)
-# 
-x = torch.from_numpy(ds_grid['lon'][:].values)
-y = torch.from_numpy(ds_grid['lat'][:].values)
-X, Y = torch.meshgrid(x, y, indexing='ij')
-
+# 初始场
+H_ini = torch.from_numpy(ds_grid['zeta'].values.astype(np.float64))
+H_ini = H_ini.T  # 调整为 [51, 81]，与模型网格一致
+H_ini = torch.nan_to_num(H_ini, nan=0.0)
+H = torch.zeros((2, params.Nx+1, params.Ny+1), dtype=torch.float64)
+H[0] = H_ini  
 
 M = torch.zeros((2, params.Nx, params.Ny+1))
 N = torch.zeros((2, params.Nx+1, params.Ny))
-# -------------------- 新增代码 --------------------
-# 替换原来的初始化：
-# 原来:
-#    H = torch.zeros((2, params.Nx+1, params.Ny+1))
-#    Z = torch.ones((params.Nx+1, params.Ny+1)) * params.depth
-# 修改后:
-H = torch.zeros((2, params.Nx+1, params.Ny+1), dtype=torch.float64)
-H[0] = H_ini  # 现在 H_ini 中不含 NaN
-
-
-# H[0] = 1 * torch.exp(-((X-X.max()//2)**2 + (Y-Y.max()//2)**2) / (2 * 50000**2))
+# 驱动
 #
 # Wx,Wy,Pa = generate_wind(X,Y,params)
 # Ws = torch.sqrt(Wx**2 + Wy**2)
@@ -150,10 +134,14 @@ for itime in range(params.NT):
 
 max_eta = np.max(np.stack(eta_list),0)
 figure(figsize=(12,8))
+pcolormesh(X,Y,max_eta,vmin=0,vmax=1);colorbar()
+axis('equal')
+xlim(120, 300)  # 经度范围
+ylim(-50, 60)   # 纬度范围
+plot(cc['coastlon'],cc['coastlat'],'k-',linewidth=.01)
+title('Max Tsunami Wave [m]')
 
-plot(cc['coastlon'],cc['coastlat'],'k-','linewidth',.01)
-pcolor(X,Y,max_eta,vmin=0,vmax=1);colorbar()
-axis((120,300,-50,60))
+
 
 v_array = np.array(v_list)
 u_array = np.array(u_list)
