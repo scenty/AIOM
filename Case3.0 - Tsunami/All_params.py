@@ -101,7 +101,7 @@ class Params_tsunami:
     def __init__(self):
         # ------------------ 新增代码 ------------------
         # 读取 XYZ 数据来确定经纬度网格
-        ds_xyz = xr.open_dataset('Data/ETOPO1_Ice_c_gdal_subset_interp.nc')
+        ds_xyz = xr.open_dataset('Data/tsunami_grid_0.1.nc')
         lon = ds_xyz['lon'].values  # 假设单位是度，如果需要转换为物理距离，请根据经纬度转化公式
         lat = ds_xyz['lat'].values
         self.lon = lon 
@@ -136,8 +136,8 @@ class Params_tsunami:
         self.FrictionDepthLimit = 5e-3
         self.f_cor = 0.0
 
-        self.dt = 50
-        self.NT = 200
+        self.dt = 25
+        self.NT = 86400//self.dt
         self.centerWeighting0 = 0.9998
 
         self.obc_ele = ['Clo', 'Clo', 'Clo', 'Clo']
