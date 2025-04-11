@@ -63,9 +63,9 @@ Wy = torch.from_numpy(Wy)
 Pa = Wx * 0 + 1000
     
     
-eta_tensor = torch.tensor(H, dtype=torch.float32).to(device)
-u_tensor = torch.tensor(M, dtype=torch.float32).to(device)
-v_tensor = torch.tensor(N, dtype=torch.float32).to(device)
+eta_tensor = torch.tensor(H, dtype=torch.float64).to(device)
+u_tensor = torch.tensor(M, dtype=torch.float64).to(device)
+v_tensor = torch.tensor(N, dtype=torch.float64).to(device)
 
 target_size = eta_tensor.shape[1:]  
 
@@ -77,8 +77,8 @@ v_resized = F.interpolate(v_tensor.unsqueeze(1),
 manning_array = torch.zeros((2, params.Nx+1, params.Ny+1))
 
 X_tensor = torch.stack([eta_tensor, u_resized, v_resized], dim=1)  
-Y_tensor = torch.tensor(manning_array, dtype=torch.float32)        
-
+Y_tensor = torch.tensor(manning_array, dtype=torch.float64)        
+X_tensor.requires_grad = True
 
 # 从 mat 文件中加载数据，返回的是一个字典
 data_filtered = sio.loadmat('Data/dart_data_filtered.mat')
@@ -87,7 +87,7 @@ data_filtered = sio.loadmat('Data/dart_data_filtered.mat')
 dart_array = data_filtered['h_all_filtered']
 
 # 转换为 torch tensor，数据类型为 float32
-dart_tensor = torch.tensor(dart_array, dtype=torch.float32)
+dart_tensor = torch.tensor(dart_array, dtype=torch.float64, requires_grad=True)
 
 
 # 文件中应存储 'lon'、'lat'（以及其它数据）
@@ -124,6 +124,7 @@ meas_indices = np.array(meas_indices)
 input_channel = 3
 model = CNN1(shapeX=input_channel).to(device)
 model.float()  
+
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
@@ -178,25 +179,36 @@ for epoch in range(num_epochs):
             
             # 对 N（尺寸：(Nx+1, Ny)）使用 land_mask 的前 Ny 列：
             N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
+        
+        scale = 1
+        # 如果当前仿真步和观测时刻对齐（300 s对应12个仿真步）
+        if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
+            measured_idx = t // 12
+            # 提取当前观测时刻16个点的测量值（注意 dart_array shape 为 [16, 145]）
+            measured_values = torch.tensor(dart_array[:, measured_idx], device=device, dtype=torch.float64)
+            # 从 H_update 中采样对应位置的水位值（假设 H_update[1] 的 shape 为 [Nx+1, Ny+1]）
+            simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
             
-            scale = 1
-            # 如果当前仿真步和观测时刻对齐（300 s对应12个仿真步）
-            if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
-                measured_idx = t // 12
-                # 提取当前观测时刻16个点的测量值（注意 dart_array shape 为 [16, 145]）
-                measured_values = torch.tensor(dart_array[:, measured_idx],
-                                               device=device, dtype=torch.float32)
-                # 从 H_update 中采样对应位置的水位值（假设 H_update[1] 的 shape 为 [Nx+1, Ny+1]）
-                # meas_indices[:,0] -> x方向索引, meas_indices[:,1] -> y方向索引
-                simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
-                loss_eta = criterion(simulated_meas * scale, measured_values * scale)
-            else:
-                loss_eta = 0 * torch.mean(H_update[1])
+            # 确保这两个张量的 requires_grad 都是 True
+            simulated_meas.requires_grad = True
+            measured_values.requires_grad = True
+            
+            # 检查 NaN 并跳过当前时间步
+            if torch.isnan(simulated_meas).any() or torch.isnan(measured_values).any():
+                print(f"NaN detected in tensors at time step {t}. Skipping this time step.")
+                continue  # 跳过当前时间步，进入下一个时间步
+            
+            loss_eta = criterion(simulated_meas * scale, measured_values * scale)
+        else:
+            loss_eta = 0 * torch.mean(H_update[1])
 
-            loss = loss_eta 
+        loss = loss_eta 
 
-            optimizer.zero_grad()
-            loss.backward()
+        optimizer.zero_grad()
+        
+        # 确保 loss 是需要梯度的
+        if loss.requires_grad:
+            loss.backward()  # 如果loss中包含了NaN，应该不会进行反向传播
             optimizer.step()
     
         # 用最新的模型参数计算一次更新（不进行梯度更新）
@@ -231,8 +243,7 @@ for epoch in range(num_epochs):
         # 计算当前时间步最终 loss（同样只在观测时刻计算）
         if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
             measured_idx = t // 12
-            measured_values = torch.tensor(dart_array[:, measured_idx],
-                                           device=device, dtype=torch.float32)
+            measured_values = torch.tensor(dart_array[:, measured_idx], device=device, dtype=torch.float64)
             simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
             final_loss_eta = criterion(simulated_meas * scale, measured_values * scale)
         else:
@@ -246,12 +257,16 @@ for epoch in range(num_epochs):
             last_epoch_N_list.append(dd(N_update[1]))
             last_epoch_manning_list.append(dd(manning))
 
-    
     # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
     epoch_avg_loss = epoch_loss_sum / params.NT
     train_loss_history.append(epoch_avg_loss.cpu().item())
 
     print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_avg_loss:.15f}")
+
+
+
+
+
 
 # 保存最后一个 epoch 的每个时间步状态和 loss
 np.save('eta_list_train_manning.npy', np.array(last_epoch_H_list))
