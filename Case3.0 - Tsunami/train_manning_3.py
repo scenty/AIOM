@@ -19,7 +19,7 @@ import torch
 import time  # 在文件头部导入
 import scipy.io as sio
 #from radam import RAdam  # 或 pip install radam，具体看第三方库
-# from torchviz import make_dot      
+from torchviz import make_dot      
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
@@ -31,7 +31,7 @@ params = Params_tsunami()
 dt = params.dt
 NT = params.NT
 
-ds_grid = xr.open_dataset('Data/tsunami_grid_1.nc')
+ds_grid = xr.open_dataset('Data/tsunami_grid_1.0.nc')
 x = torch.from_numpy(ds_grid['lon'][:].values)
 y = torch.from_numpy(ds_grid['lat'][:].values)
 
@@ -40,7 +40,7 @@ X = X.to(device)
 Y = Y.to(device)
 
 Z = torch.from_numpy(ds_grid['z'].values.astype(np.float64)).to(device)
-Z = Z.T  # 调整为 [51, 81]
+Z = Z.T
 Z = -torch.nan_to_num(Z, nan=0.0)
 Z[Z<params.dry_limit] = params.dry_limit
 land_mask = torch.from_numpy(ds_grid['mask'].values).T
@@ -126,7 +126,7 @@ model = CNN1(shapeX=input_channel).to(device)
 model.float()  
 
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.01)
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -164,104 +164,97 @@ for epoch in range(num_epochs):
         H_init = H.clone()
         M_init = M.clone()
         N_init = N.clone()
-        inner_steps = 3
+        inner_steps = 50
     
         for i in range(inner_steps):
-            manning = model(current_input).squeeze(0).squeeze(0)
-            H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
-            # 应用陆域掩模：陆地（mask==1）处水位与动量置零
-            H_update[1] = torch.where(land_mask, torch.zeros_like(H_update[1]), H_update[1])
+            manning = model(current_input).squeeze(0).squeeze(0).to(torch.float64)
+            M_update, N_update, _ , _ = momentum_nonlinear_cartesian_torch(H_init, Z, M, N, Wx[0], Wy[0], Pa[0], params, manning)
+            H_update = mass_cartesian_torch(H_init, Z, M_update, N_update, params, manning.detach())
+            #
+            #H_update[1] = torch.where(land_mask, torch.zeros_like(H_update[1]), H_update[1])
             
-            M_update, N_update, _ , _ = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[0], Wy[0], Pa[0], params, manning)
-            
-            # 对 M（尺寸：(Nx, Ny+1)）使用 land_mask 的前 Nx 行：
-            M_update[1] = torch.where(land_mask[:-1, :], torch.zeros_like(M_update[1]), M_update[1])
-            
-            # 对 N（尺寸：(Nx+1, Ny)）使用 land_mask 的前 Ny 列：
-            N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
-        
-        scale = 1
-        # 如果当前仿真步和观测时刻对齐（300 s对应12个仿真步）
-        if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
-            measured_idx = t // 12
-            # 提取当前观测时刻16个点的测量值（注意 dart_array shape 为 [16, 145]）
-            measured_values = torch.tensor(dart_array[:, measured_idx], device=device, dtype=torch.float64)
+            measured_values = torch.tensor(dart_array[:, t+20], device=device, dtype=torch.float64)
             # 从 H_update 中采样对应位置的水位值（假设 H_update[1] 的 shape 为 [Nx+1, Ny+1]）
-            simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
+            mask = torch.zeros_like(H_update[1], dtype=bool)
+            mask[meas_indices[:, 0], meas_indices[:, 1]] = True
+            simulated_meas = torch.masked_select(H_update[1], mask).to(torch.float64)
             
-            # 确保这两个张量的 requires_grad 都是 True
-            simulated_meas.requires_grad = True
-            measured_values.requires_grad = True
             
-            # 检查 NaN 并跳过当前时间步
-            if torch.isnan(simulated_meas).any() or torch.isnan(measured_values).any():
-                print(f"NaN detected in tensors at time step {t}. Skipping this time step.")
-                continue  # 跳过当前时间步，进入下一个时间步
+            loss = criterion( simulated_meas, measured_values )
+            #graph_cal = make_dot(loss) 
+            #graph_cal.render(filename = 'Net_vis', view = False, format = 'pdf')
             
-            loss_eta = criterion(simulated_meas * scale, measured_values * scale)
-        else:
-            loss_eta = 0 * torch.mean(H_update[1])
-
-        loss = loss_eta 
-
-        optimizer.zero_grad()
-        
-        # 确保 loss 是需要梯度的
-        if loss.requires_grad:
-            loss.backward()  # 如果loss中包含了NaN，应该不会进行反向传播
+            optimizer.zero_grad()
+            loss.backward()
             optimizer.step()
-    
-        # 用最新的模型参数计算一次更新（不进行梯度更新）
-        H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
-        # 应用陆域掩模：陆地（mask==1）处水位与动量置零
-        H_update[1] = torch.where(land_mask, torch.zeros_like(H_update[1]), H_update[1])
-        
-        M_update, N_update, _ , _ = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[0], Wy[0], Pa[0], params, manning)
-        
-        # 对 M（尺寸：(Nx, Ny+1)）使用 land_mask 的前 Nx 行：
-        M_update[1] = torch.where(land_mask[:-1, :], torch.zeros_like(M_update[1]), M_update[1])
-        
-        # 对 N（尺寸：(Nx+1, Ny)）使用 land_mask 的前 Ny 列：
-        N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
+            print(f"{loss.item()}")
+            
+
+            # # 
+            # M_update[1] = torch.where(land_mask[:-1, :], torch.zeros_like(M_update[1]), M_update[1])
+            # N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
         
         # 更新状态，用于下一个时间步
         H[0] = H_update[1].detach()
         M[0] = M_update[1].detach()
         N[0] = N_update[1].detach()
         
-        # 对 M_update、N_update 做插值（保证与 H_update 一致）
-        target_size = H_update[1].shape
-        M_resized = F.interpolate(M_update[1].unsqueeze(0).unsqueeze(0),
-                                  size=target_size, mode='bilinear', align_corners=False) \
-                                  .squeeze(0).squeeze(0)
-        N_resized = F.interpolate(N_update[1].unsqueeze(0).unsqueeze(0),
-                                  size=target_size, mode='bilinear', align_corners=False) \
-                                  .squeeze(0).squeeze(0)
-        current_state = torch.stack([H[0], M_resized, N_resized], dim=0)
-        current_input = current_state.unsqueeze(0).detach()
+        current_input = torch.stack([H[0], u2rho(M[0],mode='expand'), v2rho(N[0],mode='expand')], dim=0).unsqueeze(0)  
         
-        # 计算当前时间步最终 loss（同样只在观测时刻计算）
-        if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
-            measured_idx = t // 12
-            measured_values = torch.tensor(dart_array[:, measured_idx], device=device, dtype=torch.float64)
-            simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
-            final_loss_eta = criterion(simulated_meas * scale, measured_values * scale)
-        else:
-            final_loss_eta = 0 * torch.mean(H_update[1])
-        
-        epoch_loss_sum += final_loss_eta.item()
-        
-        if epoch == num_epochs - 1:
-            last_epoch_H_list.append(dd(H_update[1]))
-            last_epoch_M_list.append(dd(M_update[1]))
-            last_epoch_N_list.append(dd(N_update[1]))
-            last_epoch_manning_list.append(dd(manning))
 
-    # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
-    epoch_avg_loss = epoch_loss_sum / params.NT
-    train_loss_history.append(epoch_avg_loss.cpu().item())
+        # # 计算当前 epoch 内所有时间步的平均 loss，并保存到总的 loss 历史中
+        # epoch_avg_loss = epoch_loss_sum / params.NT
+        # train_loss_history.append(epoch_avg_loss.cpu().item())
 
-    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_avg_loss:.15f}")
+        # print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_avg_loss:.15f}")
+
+        
+        
+    
+        # # 用最新的模型参数计算一次更新（不进行梯度更新）
+        # H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
+        # # 应用陆域掩模：陆地（mask==1）处水位与动量置零
+        # H_update[1] = torch.where(land_mask, torch.zeros_like(H_update[1]), H_update[1])
+        
+        # M_update, N_update, _ , _ = momentum_nonlinear_cartesian_torch(H_update, Z, M, N, Wx[0], Wy[0], Pa[0], params, manning)
+        
+        # # 对 M（尺寸：(Nx, Ny+1)）使用 land_mask 的前 Nx 行：
+        # M_update[1] = torch.where(land_mask[:-1, :], torch.zeros_like(M_update[1]), M_update[1])
+        
+        # # 对 N（尺寸：(Nx+1, Ny)）使用 land_mask 的前 Ny 列：
+        # N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
+        
+
+        
+        # # 对 M_update、N_update 做插值（保证与 H_update 一致）
+        # target_size = H_update[1].shape
+        # M_resized = F.interpolate(M_update[1].unsqueeze(0).unsqueeze(0),
+        #                           size=target_size, mode='bilinear', align_corners=False) \
+        #                           .squeeze(0).squeeze(0)
+        # N_resized = F.interpolate(N_update[1].unsqueeze(0).unsqueeze(0),
+        #                           size=target_size, mode='bilinear', align_corners=False) \
+        #                           .squeeze(0).squeeze(0)
+        # current_state = torch.stack([H[0], M_resized, N_resized], dim=0)
+        # current_input = current_state.unsqueeze(0).detach()
+        
+        # # 计算当前时间步最终 loss（同样只在观测时刻计算）
+        # if t % 12 == 0 and (t // 12) < dart_array.shape[1]:
+        #     measured_idx = t // 12
+        #     measured_values = torch.tensor(dart_array[:, measured_idx], device=device, dtype=torch.float64)
+        #     simulated_meas = H_update[1][meas_indices[:,0], meas_indices[:,1]]
+        #     final_loss_eta = criterion(simulated_meas * scale, measured_values * scale)
+        # else:
+        #     final_loss_eta = 0 * torch.mean(H_update[1])
+        
+        # epoch_loss_sum += final_loss_eta.item()
+        
+        # if epoch == num_epochs - 1:
+        #     last_epoch_H_list.append(dd(H_update[1]))
+        #     last_epoch_M_list.append(dd(M_update[1]))
+        #     last_epoch_N_list.append(dd(N_update[1]))
+        #     last_epoch_manning_list.append(dd(manning))
+
+
 
 
 

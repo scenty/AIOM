@@ -64,18 +64,22 @@ def rho2v(Y):
         F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)
         for i in range(Y.size(0)) ], dim=0).squeeze() #no t()
     return H_v
-def u2rho(Y):
+def u2rho(Y, mode ='default'):
     #from u-point to rho-point (-1 at first dimension)
     # - Y: 2D tensor
+    if mode == 'expand':
+        Y = F.pad(Y,[0,0,1,1])
     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
     Yr = torch.stack([
         F.conv1d(Y[:, i].unsqueeze(0).unsqueeze(0), kernel, padding=0)
         for i in range(Y.size(1)) ], dim=2).squeeze().t()
     return Yr
 
-def v2rho(Y):
+def v2rho(Y, mode ='default'):
     #from v-point to rho-point (-1 at second dimension)
     # - Y: 2D tensor
+    if mode == 'expand':
+        Y = F.pad(Y,[1,1,0,0])
     kernel = torch.tensor([.5,.5], dtype=Y.dtype,device=Y.device).unsqueeze(0).unsqueeze(0) #[1,1,2]
     Yr = torch.stack([ 
         F.conv1d(Y[i, :].unsqueeze(0).unsqueeze(0), kernel, padding=0)

@@ -13,7 +13,7 @@ from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def mass_cartesian_torch(H, Z, M, N, params):
+def mass_cartesian_torch(H, Z, M, N, params,manning):
     """
     params: structure containing all parameters including:
         - rho_air: air density (default 1.2)
@@ -44,7 +44,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1[1:-1,1:-1] = H0[1:-1,1:-1].detach() - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
@@ -176,7 +176,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     #by LWF
     friction_mask = (D0 > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_u = rho2u(manning/10)
+    Cf_u = rho2u(manning)
 
     #Nu was generated before
     Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
@@ -244,7 +244,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     #N_val = torch.where(mask_fs999_N, torch.zeros_like(N_val), N_val)
     friction_maskN = (D0N > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_v = rho2v(manning/10)
+    Cf_v = rho2v(Cf)
 
     
     Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(Mv**2 + n0**2) * n0

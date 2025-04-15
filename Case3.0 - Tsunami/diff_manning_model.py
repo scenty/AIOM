@@ -150,58 +150,42 @@ eta = np.array(eta_list)
 # Fy_array = np.array(Fy_list)
 # sustr_array = np.array(sustr_list)
 # svstr_array = np.array(svstr_list)
-   
-np.save('v_large_array.npy', v_array)
-np.save('u_large_array.npy', u_array)
-np.save('eta_large.npy', eta)
 # np.save('Fx_large_array.npy', Fx_array)
 # np.save('Fy_large_array.npy', Fy_array) 
 
 
-   
-# u_center = np.empty((u_array.shape[0], x.shape[0], y.shape[0]))
-# u_center[:, 1:-1, :] = 0.5 * (u_array[:, :-1, :] + u_array[:, 1:, :])
-# # 边界处理：这里可以选择外推或者简单复制
-# u_center[:, 0, :] = u_array[:, 0, :]
-# u_center[:, -1, :] = u_array[:, -1, :]
+# 计算 u_center 和 v_center（保持原逻辑）
+u_center = np.empty((u_array.shape[0], x.shape[0], y.shape[0]))
+u_center[:, 1:-1, :] = 0.5 * (u_array[:, :-1, :] + u_array[:, 1:, :])
+u_center[:, 0, :] = u_array[:, 0, :]  # 边界处理
+u_center[:, -1, :] = u_array[:, -1, :]
 
-# # 对 v 在 y 方向进行外推或者插值
-# v_center = np.empty((v_array.shape[0], x.shape[0], y.shape[0]))
-# v_center[:, :, 1:-1] = 0.5 * (v_array[:, :, :-1] + v_array[:, :, 1:])
-# v_center[:, :, 0] = v_array[:, :, 0]
-# v_center[:, :, -1] = v_array[:, :, -1]
-    
-# # 保存 eta 数据
-# ds_eta = xr.Dataset(
-#     {'eta': (['time', 'lat', 'lon'], np.array(eta_list))},
-#     coords={
-#         'lat': x,
-#         'lon': y,
-#         'time': np.arange(len(eta_list))
-#     }
-# )
-# ds_eta.to_netcdf('out_large_eta.nc')
+v_center = np.empty((v_array.shape[0], x.shape[0], y.shape[0]))
+v_center[:, :, 1:-1] = 0.5 * (v_array[:, :, :-1] + v_array[:, :, 1:])
+v_center[:, :, 0] = v_array[:, :, 0]  # 边界处理
+v_center[:, :, -1] = v_array[:, :, -1]
 
-# # 保存 u 数据
-# ds_u = xr.Dataset(
-#     {'u': (['time', 'lat', 'lon'], np.array(u_array))},
-#     coords={
-#         'lat': x[:-1],
-#         'lon': y,
-#         'time': np.arange(len(u_array))
-#     }
-# )
-# ds_u.to_netcdf('out_large_u.nc')
+# 创建统一的 Dataset
+ds_combined = xr.Dataset(
+    {
+        'eta': (['time', 'lat', 'lon'], np.array(eta_list).swapaxes(1,2)),  # eta 在中心点
+        'u': (['time', 'lat', 'lon' ], u_center.swapaxes(1,2)),      # u 插值到中心点
+        'v': (['time', 'lat', 'lon' ], v_center.swapaxes(1,2))       # v 插值到中心点
+    },
+    coords={
+        'lat': y,                             # 纬度中心点坐标
+        'lon': x,                             # 经度中心点坐标
+        'time': np.arange(len(eta_list))*500      # 时间坐标
+    },
+    attrs={
+        'description': 'Combined output of eta, u, v, and their center-interpolated values',
+    }
+)
 
-# # 保存 v 数据
-# ds_v = xr.Dataset(
-#     {'v': (['time', 'lat', 'lon'], np.array(v_array))},
-#     coords={
-#         'lat': x,
-#         'lon': y[:-1],
-#         'time': np.arange(len(v_array))
-#     }
-# )
-# ds_v.to_netcdf('out_large_v.nc')
+ds_combined['time'].encoding.update({
+    'units': 'minutes since 2011-03-11 05:46:00',
+    'calendar': 'proleptic_gregorian'
+})
 
+ds_combined.to_netcdf('his.tsunami_grid_0.1.nc')
 # np.save('manning_large_distribution.npy', params.manning.numpy())    
