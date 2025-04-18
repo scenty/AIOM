@@ -62,7 +62,7 @@ def mass_cartesian_torch(H, Z, M, N, params):
     # 把 H0、H1 拼成新的两层张量
     H_new = torch.stack((H0, H1), dim=0)
     # 边界条件也不要做原地修改
-    H_new = bcond_zeta_vec(H_new, Z, params)
+    #H_new = bcond_zeta_vec(H_new, Z, params)
 
     # 检查 NaN
     assert not torch.any(torch.isnan(H_new))
@@ -241,8 +241,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     z_n = 0
     z_s = 0
     
-    M_new = bcond_u2D_vec(H, Z, M_new, D_M, flux_sign_M, z_w, z_e, params)
-    N_new = bcond_v2D_vec(H, Z, N_new, D_N, flux_sign_N, z_s, z_n, params)
+    #M_new = bcond_u2D_vec(H, Z, M_new, D_M, flux_sign_M, z_w, z_e, params)
+    #N_new = bcond_v2D_vec(H, Z, N_new, D_N, flux_sign_N, z_s, z_n, params)
     assert not torch.any(torch.isnan(M_new))
     assert not torch.any(torch.isnan(N_new))
     

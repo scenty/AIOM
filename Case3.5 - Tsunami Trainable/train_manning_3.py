@@ -210,7 +210,7 @@ for epoch in range(1, num_epochs+1):
         print(f"  After step {t}/{params.NT}: zeros in simulated = {num_zeros}/{simulated.numel()}")
 
         if not training_enabled:
-            if num_zeros > 0:
+            if num_zeros > 12:
                 continue
             else:
                 print("→ 开启训练")
@@ -265,6 +265,7 @@ for epoch in range(1, num_epochs+1):
             H = torch.roll(H_mid.detach(), shifts=-1, dims=0)
             M = torch.roll(M_mid.detach(), shifts=-1, dims=0)
             N = torch.roll(N_mid.detach(), shifts=-1, dims=0)
+            t +=1
     print(f"Epoch {epoch} loss={total_epoch_loss:.6f}")
 
 
