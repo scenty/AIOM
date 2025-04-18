@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr  2 11:04:22 2025
-
-@author: Scenty
-"""
 import numpy as np
 #import vis_tools
 import matplotlib.pyplot as plt
@@ -16,6 +10,8 @@ import torch
 import torch.nn.functional as F
 from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def mass_cartesian_torch(H, Z, M, N, params):
     """
@@ -40,17 +36,15 @@ def mass_cartesian_torch(H, Z, M, N, params):
     MinWaterDepth = params.MinWaterDepth
         
     H0 = H[0]
-    M0 = M[1]
-    N0 = N[1]
-    #M0 = M[0]
-    #N0 = N[0] was 
+    M0 = M[0]
+    N0 = N[0]
     Nx, Ny = H0.shape
       
     dMdx = ddx(M0)
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1[1:-1,1:-1] = H0[1:-1,1:-1].detach() - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
@@ -131,6 +125,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
         
     # 重构流深, TODO(check Lechi的修改)
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
+
     # get forcing
     windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)
     sustr = rho2u( rho_air / rho_water * Cd * windSpeed * Wx)
@@ -161,6 +156,11 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     
     # Flux-centered, Lu started here
     dPdx = ddx(Pa,'inner')
+
+    D0 = D0.to(device)
+    dPdx = dPdx.to(device)
+
+    
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
     ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
@@ -176,23 +176,28 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     #by LWF
     friction_mask = (D0 > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_u = rho2u(manning/10)
+    Cf_u = rho2u(manning)
+
     #Nu was generated before
     Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     # Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(torch.clamp(m0**2 + Nu**2, min=epsilon)) * m0
     # Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
     # Fx = torch.where(friction_mask, Fx, torch.zeros_like(Fx))
-        
+    sustr = torch.tensor(sustr, dtype=torch.float64).to(device)
+    f_cor = torch.tensor(f_cor, dtype=torch.float64).to(device)
+    Nu = torch.tensor(Nu, dtype=torch.float64).to(device)    
+    
     phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
     M_new = M.clone().detach() #by LWF    
-    M_new[1] = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
-            + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
-            - CC1 * ududx                                  #u advection
-            - CC2 * vdudy                                  #v advection
-            - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x        #pgf
-            - dt  * Fx)                                    #friction
+    # M_new[1] = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
+    #         + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
+    #         - CC1 * ududx                                  #u advection
+    #         - CC2 * vdudy                                  #v advection
+    #         - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x        #pgf
+    #         - dt  * Fx)                                    #friction
     
+    M_new[1] = dt  * Fx
     #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
     #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
 
@@ -221,6 +226,11 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
 
     #Lu
     dPdy = ddy(Pa,'inner')
+    
+    D0N = D_N.to(device)
+    dPdy = dPdy.to(device)
+
+
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
     udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
@@ -236,12 +246,18 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     friction_maskN = (D0N > FrictionDepthLimit)
     epsilon = 1e-9
     Cf_v = rho2v(Cf)
+
+    
     Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(Mv**2 + n0**2) * n0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     #Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(torch.clamp(Mv**2 + n0**2, min=epsilon)) * n0
     #Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
     #Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
     # 
+    svstr = torch.tensor(svstr, dtype=torch.float64).to(device)
+
+    Mv = torch.tensor(Mv, dtype=torch.float64).to(device) 
+    
     N_new = N.detach() #by LWF
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
     N_new[1] = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
@@ -804,4 +820,3 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], new_matrix], dim=0)
     
     return N_new
-

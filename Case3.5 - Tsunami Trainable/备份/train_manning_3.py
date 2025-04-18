@@ -126,7 +126,7 @@ model = CNN1(shapeX=input_channel).to(device)
 model.float()  
 
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+optimizer = optim.Adam(model.parameters(), lr=0.1)
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -161,38 +161,52 @@ for epoch in range(num_epochs):
     
     for t in range(params.NT):
         # 保存当前时间步的初始状态
+        # 保存当前时间步的初始状态
+        print(t)
         H_init = H.clone()
         M_init = M.clone()
         N_init = N.clone()
+                
+        manning = model(current_input).squeeze(0).squeeze(0)
         inner_steps = 50
-    
-        for i in range(inner_steps):
-            manning = model(current_input).squeeze(0).squeeze(0).to(torch.float64)
-            M_update, N_update, _ , _ = momentum_nonlinear_cartesian_torch(H_init, Z, M, N, Wx[0], Wy[0], Pa[0], params, manning)
-            H_update = mass_cartesian_torch(H_init, Z, M_update, N_update, params, manning.detach())
-            #
-            #H_update[1] = torch.where(land_mask, torch.zeros_like(H_update[1]), H_update[1])
-            
-            measured_values = torch.tensor(dart_array[:, t+20], device=device, dtype=torch.float64)
-            # 从 H_update 中采样对应位置的水位值（假设 H_update[1] 的 shape 为 [Nx+1, Ny+1]）
-            mask = torch.zeros_like(H_update[1], dtype=bool)
-            mask[meas_indices[:, 0], meas_indices[:, 1]] = True
-            simulated_meas = torch.masked_select(H_update[1], mask).to(torch.float64)
-            
-            
-            loss = criterion( simulated_meas, measured_values )
-            #graph_cal = make_dot(loss) 
-            #graph_cal.render(filename = 'Net_vis', view = False, format = 'pdf')
-            
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            print(f"{loss.item()}")
-            
-
-            # # 
-            # M_update[1] = torch.where(land_mask[:-1, :], torch.zeros_like(M_update[1]), M_update[1])
-            # N_update[1] = torch.where(land_mask[:, :-1], torch.zeros_like(N_update[1]), N_update[1])
+        if t>12:
+            # 内循环：重复 inner_steps 次进行前向传播和反向传播
+            for i in range(inner_steps):
+                
+                #tic()
+                manning = model(current_input).squeeze(0).squeeze(0)        
+                #
+                H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
+                M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(H_update, Z, M_init, N_init, Wx[0], Wy[0], Pa[0], params, manning)
+                
+                measured_values = torch.tensor(dart_array[:, t], device=device, dtype=torch.float64)
+                mask = torch.zeros_like(H_update[1], dtype=bool)
+                mask[meas_indices[:, 0], meas_indices[:, 1]] = True
+                simulated_meas = torch.masked_select(H_update[1], mask).to(torch.float64)
+                
+                scale = 1
+                #loss = criterion( M_update[1], torch.ones_like(M_update[1]) )
+                loss = criterion( measured_values, simulated_meas)
+                
+                #loss_eta = criterion(H_update[1]* scale, eta_array[t].to(device)* scale)
+                #loss_u = criterion(M_update[1]* scale, u_array[t].to(device)* scale)
+                #loss_v = criterion(N_update[1]* scale, v_array[t].to(device)* scale)
+                #loss = loss_eta + loss_u + loss_v
+                
+                # graph_cal = make_dot(loss) 
+                # graph_cal.render(filename = 'NoDetach', view = False, format = 'png')
+                
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                print(f"training i={i}, Loss={loss.item()}")
+            #toc()
+            #print(f"Inner loop")
+        
+        # 用最新的模型参数计算一次更新（不进行梯度更新）
+        H_update = mass_cartesian_torch(H_init, Z, M_init, N_init, params)
+        M_update, N_update, Fx, Fy = momentum_nonlinear_cartesian_torch(H_update, Z, M_init, N_init, Wx[0], Wy[0], Pa[0], params, manning)
         
         # 更新状态，用于下一个时间步
         H[0] = H_update[1].detach()

@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr  2 11:04:22 2025
-
-@author: Scenty
-"""
 import numpy as np
 #import vis_tools
 import matplotlib.pyplot as plt
@@ -17,7 +11,9 @@ import torch.nn.functional as F
 from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
-def mass_cartesian_torch(H, Z, M, N, params):
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def mass_cartesian_torch(H0, Z, M0, N0, params, manning):
     """
     params: structure containing all parameters including:
         - rho_air: air density (default 1.2)
@@ -39,18 +35,13 @@ def mass_cartesian_torch(H, Z, M, N, params):
     dry_limit = params.dry_limit
     MinWaterDepth = params.MinWaterDepth
         
-    H0 = H[0]
-    M0 = M[1]
-    N0 = N[1]
-    #M0 = M[0]
-    #N0 = N[0] was 
     Nx, Ny = H0.shape
       
     dMdx = ddx(M0)
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1[1:-1,1:-1] = H0[1:-1,1:-1].detach() - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
         
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
@@ -79,14 +70,14 @@ def mass_cartesian_torch(H, Z, M, N, params):
     #TODO boundary tide
     #H_new[1,1,:] = 1.0 * np.sin(2 * np.pi / 200 * params.itime * params.dt)
     
-    H_new = torch.stack((H0, H1), dim=0)
-    H_new = bcond_zeta_torch(H_new, Z, params)
+    H1 = bcond_zeta_torch(H1, Z, params,H0=None) #if using Chapman, H0 need to be provided
     
-    assert not torch.any(torch.isnan(H_new))
+    assert not torch.any(torch.isnan(H1))
     
-    return H_new
+    return H1
 
-def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
+
+def momentum_nonlinear_cartesian_simple(H, Z, M, N, Wx, Wy, Pa, params, manning):
     """
     - H: water elevation
     - Z: domain depth
@@ -131,6 +122,7 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
         
     # 重构流深, TODO(check Lechi的修改)
     D_M, D_N = reconstruct_flow_depth_torch(H, Z, M, N, params)
+
     # get forcing
     windSpeed = torch.sqrt(Wx * Wx + Wy * Wy)
     sustr = rho2u( rho_air / rho_water * Cd * windSpeed * Wx)
@@ -161,6 +153,11 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     
     # Flux-centered, Lu started here
     dPdx = ddx(Pa,'inner')
+
+    D0 = D0.to(device)
+    dPdx = dPdx.to(device)
+
+    
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
     ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
@@ -176,23 +173,28 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     #by LWF
     friction_mask = (D0 > FrictionDepthLimit)
     epsilon = 1e-9
-    Cf_u = rho2u(manning/10)
+    Cf_u = rho2u(manning)
+
     #Nu was generated before
     Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(m0**2 + Nu**2) * m0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     # Fx = g * Cf_u**2 / (D0**2.33 + 1e-9) * torch.sqrt(torch.clamp(m0**2 + Nu**2, min=epsilon)) * m0
     # Fx = torch.where(torch.abs(dt*Fx)>torch.abs(m0), m0/dt, Fx)
     # Fx = torch.where(friction_mask, Fx, torch.zeros_like(Fx))
-        
+    sustr = torch.tensor(sustr, dtype=torch.float64).to(device)
+    f_cor = torch.tensor(f_cor, dtype=torch.float64).to(device)
+    Nu = torch.tensor(Nu, dtype=torch.float64).to(device)    
+    
     phi_M = 1.0 - CC1 * torch.min(torch.abs(m0 / torch.clamp(D0, min=MinWaterDepth)), torch.sqrt(g*D0))
     M_new = M.clone().detach() #by LWF    
-    M_new[1] = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
-            + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
-            - CC1 * ududx                                  #u advection
-            - CC2 * vdudy                                  #v advection
-            - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x        #pgf
-            - dt  * Fx)                                    #friction
+    # M_new[1] = (phi_M*m0 + 0.5*(1.0 - phi_M)*(m1 + m2)        #implicit friction
+    #         + dt  * ( sustr + f_cor * Nu)                  #wind stress and coriolis
+    #         - CC1 * ududx                                  #u advection
+    #         - CC2 * vdudy                                  #v advection
+    #         - CC3 * D0*(h2u_M - h1u_M) + Pre_grad_x        #pgf
+    #         - dt  * Fx)                                    #friction
     
+    M_new[1] = dt  * Fx
     #pcolor(rho2u(X),rho2u(Y),ududx);colorbar();show()
     #pcolor(rho2u(X),rho2u(Y),vdudy);colorbar();show()
 
@@ -221,6 +223,11 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
 
     #Lu
     dPdy = ddy(Pa,'inner')
+    
+    D0N = D_N.to(device)
+    dPdy = dPdy.to(device)
+
+
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
     udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
@@ -236,12 +243,18 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     friction_maskN = (D0N > FrictionDepthLimit)
     epsilon = 1e-9
     Cf_v = rho2v(Cf)
+
+    
     Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(Mv**2 + n0**2) * n0
     #by LWF, when optimize, do not use clamping, replacing, or non-torch operations
     #Fy = g * Cf_v**2 / (D0N**2.33 + 1e-9) * torch.sqrt(torch.clamp(Mv**2 + n0**2, min=epsilon)) * n0
     #Fy = torch.where(torch.abs(dt*Fy)>torch.abs(n0), n0/dt, Fy)
     #Fy = torch.where(friction_maskN, Fy, torch.zeros_like(Fy))
     # 
+    svstr = torch.tensor(svstr, dtype=torch.float64).to(device)
+
+    Mv = torch.tensor(Mv, dtype=torch.float64).to(device) 
+    
     N_new = N.detach() #by LWF
     phi_N = 1.0 - CC2 * torch.min(torch.abs(n0 / torch.clamp(D0N, min=MinWaterDepth)), torch.sqrt(g*D0N))
     N_new[1] = (phi_N*n0 + 0.5*(1.0 - phi_N)*(n1 + n2) 
@@ -342,9 +355,10 @@ def check_flux_direction_torch(z1, z2, h1, h2, dry_limit):
 
 
 
-def bcond_zeta_torch(H, Z, params):
+def bcond_zeta_torch(H1, Z, params, H0=None):
     """
-    :ocean H:  domain elevation (PyTorch tensor)
+    :ocean H1: domain elevation (PyTorch tensor)
+    :ocean H0: optional, elevation of last step
     :ocean Z:  domain depth (PyTorch tensor)
     :param params: parameters structure containing:
         - obc_ele: boundary conditions
@@ -357,78 +371,73 @@ def bcond_zeta_torch(H, Z, params):
     CC1 = params.CC1
     CC2 = params.CC2
     g = params.g
-    if H.ndim == 3:
-        Nx, Ny = H.shape[1], H.shape[2]
-    else: # H.ndim==2
-        Nx, Ny = H.shape[0], H.shape[1]
+    Nx, Ny = H1.shape[0], H1.shape[1]
     # western side
     if obc_ele[0] == 'Cha_e':  # explicit Chapman boundary condition
-        for iy in range(Ny):
-            Cx = CC1 * torch.sqrt(g * (Z[1, iy] + H[0, 1, iy]))
-            H[1, 0, iy] = (1.0 - Cx) * H[0, 0, iy] + Cx * H[0, 1, iy]
+        #for iy in range(Ny): #removing Ny loop
+        Cx = CC1 * torch.sqrt(g * (Z[1] + H0[1]))
+        H1 = (1.0 - Cx) * H0[0] + Cx * H0[1]
     elif obc_ele[0] == 'Cha_i':  # implicit Chapman boundary condition.
         for iy in range(Ny):
-            Cx = CC1 * torch.sqrt(g * (Z[1, iy] + H[0, 1, iy]))
+            Cx = CC1 * torch.sqrt(g * (Z[1, iy] + H0[1, iy]))
             cff2 = 1.0 / (1.0 + Cx)
-            H[1, 0, iy] = cff2 * (H[0, 0, iy] + Cx * H[1, 1, iy])
+            H1[0, iy] = cff2 * (H0[0, iy] + Cx * H1[1, iy])
     elif obc_ele[0] == 'Gra':
-        H[1, 0] = H[1, 1] # by LWF
+        H1[0] = H1[1] # by LWF
     elif obc_ele[0] == 'Clo':
-        H[1, 0, :] = 0.0
+        H1[0, :] = 0.0
     elif obc_ele[0] == 'Rad':
-        for iy in range(Ny):
-            H[1, 0, iy] = H[0, 0, iy] - 2 * CC1 / torch.sqrt(g * (Z[0, iy] + H[0, 0, iy])) * (H[0, 0, iy] - H[0, 1, iy])
-    # eastern side
-    if obc_ele[2] == 'Cha_e':  # explicit Chapman boundary condition
-        for iy in range(Ny):
-            Cx = CC1 * torch.sqrt(g * (Z[Nx - 2, iy] + H[0, Nx - 2, iy]))
-            H[1, Nx - 1, iy] = (1.0 - Cx) * H[0, Nx - 1, iy] + Cx * H[0, Nx - 2, iy]
-    elif obc_ele[2] == 'Cha_i':  # implicit Chapman boundary condition.
-        for iy in range(Ny):
-            Cx = CC1 * torch.sqrt(g * (Z[Nx - 2, iy] + H[0, Nx - 2, iy]))
-            cff2 = 1.0 / (1.0 + Cx)
-            H[1, Nx - 1, iy] = cff2 * (H[0, Nx - 1, iy] + Cx * H[1, Nx - 2, iy])
+        #for iy in range(Ny): removing the Ny loop
+        H1[0, :] = H0[0, :] - 2 * CC1 / torch.sqrt(g * (Z[0, :] + H0[0, :])) * (H0[0, :] - H0[1, :])
+    
+    # --- Eastern Boundary (iy loop -> vectorized) ---
+    if obc_ele[2] == 'Cha_e':
+        Cx = CC1 * torch.sqrt(g * (Z[Nx-2, :] + H0[Nx-2, :]))
+        H1[Nx-1, :] = (1.0 - Cx) * H0[Nx-1, :] + Cx * H0[Nx-2, :]
+    elif obc_ele[2] == 'Cha_i':
+        Cx = CC1 * torch.sqrt(g * (Z[Nx-2, :] + H0[Nx-2, :]))
+        cff2 = 1.0 / (1.0 + Cx)
+        H1[Nx-1, :] = cff2 * (H0[Nx-1, :] + Cx * H1[Nx-2, :])
     elif obc_ele[2] == 'Gra':
-        H[1, Nx - 1, :] = H[1, Nx - 2, :]
+        H1[Nx-1, :] = H1[Nx-2, :]
     elif obc_ele[2] == 'Clo':
-        H[1, Nx - 1, :] = 0.0
+        H1[Nx-1, :] = 0.0
     elif obc_ele[2] == 'Rad':
-        for iy in range(Ny):
-            H[1, Nx - 1, iy] = H[0, Nx - 1, iy] - 2 * CC1 / torch.sqrt(g * (Z[Nx - 1, iy] + H[0, Nx - 1, iy])) * (H[0, Nx - 1, iy] - H[0, Nx - 2, iy])
-    # southern side
-    if obc_ele[1] == 'Cha_e':  # explicit Chapman boundary condition
-        for ix in range(Nx):
-            Ce = CC2 * torch.sqrt(g * (Z[ix, 1] + H[0, ix, 1]))
-            H[1, ix, 0] = (1.0 - Ce) * H[0, ix, 0] + Ce * H[0, ix, 1]
-    elif obc_ele[1] == 'Cha_i':  # implicit Chapman boundary condition.
-        for ix in range(Nx):
-            Ce = CC2 * torch.sqrt(g * (Z[ix, 1] + H[0, ix, 1]))
-            cff2 = 1.0 / (1.0 + Ce)
-            H[1, ix, 0] = cff2 * (H[0, ix, 0] + Ce * H[1, ix, 1])
+        Cx = 2 * CC1 / torch.sqrt(g * (Z[Nx-1, :] + H0[Nx-1, :]))
+        H1[Nx-1, :] = H0[Nx-1, :] - Cx * (H0[Nx-1, :] - H0[Nx-2, :])
+        
+    # --- Southern Boundary (ix loop -> vectorized) ---
+    if obc_ele[1] == 'Cha_e':
+        Ce = CC2 * torch.sqrt(g * (Z[:, 1] + H0[:, 1]))
+        H1[:, 0] = (1.0 - Ce) * H0[:, 0] + Ce * H0[:, 1]
+    elif obc_ele[1] == 'Cha_i':
+        Ce = CC2 * torch.sqrt(g * (Z[:, 1] + H0[:, 1]))
+        cff2 = 1.0 / (1.0 + Ce)
+        H1[:, 0] = cff2 * (H0[:, 0] + Ce * H1[:, 1])
     elif obc_ele[1] == 'Gra':
-        H[1, :, 0] = H[1, :, 1]
+        H1[:, 0] = H1[:, 1]
     elif obc_ele[1] == 'Clo':
-        H[1, :, 0] = 0.0
+        H1[:, 0] = 0.0
     elif obc_ele[1] == 'Rad':
-        for ix in range(Nx):
-            H[1, ix, 0] = H[0, ix, 0] - 2.0 * CC2 * torch.sqrt(g * (Z[ix, 0] + H[0, ix, 0])) * (H[0, ix, 0] - H[0, ix, 1])
-    # northern side
-    if obc_ele[3] == 'Cha_e':  # explicit Chapman boundary condition
-        for ix in range(Nx):
-            Ce = CC2 * torch.sqrt(g * (Z[ix, Ny - 2] + H[0, ix, Ny - 2]))
-            H[1, ix, Ny - 1] = (1.0 - Ce) * H[0, ix, Ny - 1] + Ce * H[0, ix, Ny - 2]
-    elif obc_ele[3] == 'Cha_i':  # implicit Chapman boundary condition.
-        for ix in range(Nx):
-            Ce = CC2 * torch.sqrt(g * (Z[ix, Ny - 2] + H[0, ix, Ny - 2]))
-            cff2 = 1.0 / (1.0 + Ce)
-            H[1, ix, Ny - 1] = cff2 * (H[0, ix, Ny - 1] + Ce * H[1, ix, Ny - 2])
+        Ce = 2.0 * CC2 * torch.sqrt(g * (Z[:, 0] + H0[:, 0]))
+        H1[:, 0] = H0[:, 0] - Ce * (H0[:, 0] - H0[:, 1])
+    
+    # --- Northern Boundary (ix loop -> vectorized) ---
+    if obc_ele[3] == 'Cha_e':
+        Ce = CC2 * torch.sqrt(g * (Z[:, Ny-2] + H0[:, Ny-2]))
+        H1[:, Ny-1] = (1.0 - Ce) * H0[:, Ny-1] + Ce * H0[:, Ny-2]
+    elif obc_ele[3] == 'Cha_i':
+        Ce = CC2 * torch.sqrt(g * (Z[:, Ny-2] + H0[:, Ny-2]))
+        cff2 = 1.0 / (1.0 + Ce)
+        H1[:, Ny-1] = cff2 * (H0[:, Ny-1] + Ce * H1[:, Ny-2])
     elif obc_ele[3] == 'Gra':
-        H[1, :, Ny - 1] = H[1, :, Ny - 2]
+        H1[:, Ny-1] = H1[:, Ny-2]
     elif obc_ele[3] == 'Clo':
-        H[1, :, Ny - 1] = 0.0
+        H1[:, Ny-1] = 0.0
     elif obc_ele[3] == 'Rad':
-        for ix in range(Nx):
-            H[1, ix, Ny - 1] = H[0, ix, Ny - 1] - 2.0 * CC2 * torch.sqrt(g * (Z[ix, Ny - 1] + H[0, ix, Ny - 1])) * (H[0, ix, Ny - 1] - H[0, ix, Ny - 2])
+        Ce = 2.0 * CC2 * torch.sqrt(g * (Z[:, Ny-1] + H0[:, Ny-1]))
+        H1[:, Ny-1] = H0[:, Ny-1] - Ce * (H0[:, Ny-1] - H0[:, Ny-2])
+
     return H
 
 
@@ -804,4 +813,3 @@ def bcond_v2D_torch(H, Z, N, D_N, z_s, z_n, Params):
         N_new = torch.stack([N_new[0], new_matrix], dim=0)
     
     return N_new
-

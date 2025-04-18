@@ -42,16 +42,15 @@ def mass_cartesian_torch(H, Z, M, N, params):
     H0 = H[0]
     M0 = M[1]
     N0 = N[1]
-    #M0 = M[0]
-    #N0 = N[0] was 
     Nx, Ny = H0.shape
       
     dMdx = ddx(M0)
     dNdy = ddy(N0)
     
     H1 = H0.clone()
-    H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
-        
+    # H1[1:-1,1:-1] = H0[1:-1,1:-1] - CC1 * dMdx[1:-1,1:-1] - CC2 * dNdy[1:-1,1:-1]
+    H1 = H0.detach() - CC1 * dMdx - CC2 * dNdy
+    
     #TODO    
     # 干湿修正（使用 torch.where 保证全为新张量）
     mask_deep = (Z <= -dry_limit).to(H1.device)
@@ -150,8 +149,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
 
     z1_M = Z[:-1, :]
     z2_M = Z[1:, :]
-    h1_M = H[1, :-1, :]
-    h2_M = H[1, 1:, :]
+    h1_M = H[0, :-1, :]
+    h2_M = H[0, 1:, :]
     flux_sign_M, h1u_M, h2u_M = check_flux_direction_torch(z1_M, z2_M, h1_M, h2_M, params.dry_limit)
 
     cond_m0pos = (m0 >= 0)
@@ -163,8 +162,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     dPdx = ddx(Pa,'inner')
     Pre_grad_x = CC1 * D0 * dPdx / rho_water
     
-    ududx = F.pad( ududx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
-    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
+    ududx = F.pad( ududx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
+    vdudy = F.pad( vdudy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
     
     # Nu is applied here and in the friction below
     N_exp = torch.cat( (N[0,:,0:1], N[0], N[0,:,-1:]), dim = 1)
@@ -210,8 +209,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     
     z1_N = Z[:, :-1]
     z2_N = Z[:, 1:]
-    h1_N = H[1, :, :-1]
-    h2_N = H[1, :, 1:]
+    h1_N = H[0, :, :-1]
+    h2_N = H[0, :, 1:]
     flux_sign_N, h1u_N, h2u_N = check_flux_direction_torch(z1_N, z2_N, h1_N, h2_N, params.dry_limit)
 
     cond_n0pos = (n0 >= 0)
@@ -223,8 +222,8 @@ def momentum_nonlinear_cartesian_torch(H, Z, M, N, Wx, Wy, Pa, params, manning):
     dPdy = ddy(Pa,'inner')
     Pre_grad_y = CC2 * D0N * dPdy / rho_water
     
-    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[1]), (0,0,1,1)) #pad for up and down
-    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[1]), (1,1,0,0)) #pad for left and right
+    udvdx = F.pad( udvdx_up(M[0],N[0],Z+H[0]), (0,0,1,1)) #pad for up and down
+    vdvdy = F.pad( vdvdy_up(M[0],N[0],Z+H[0]), (1,1,0,0)) #pad for left and right
     
     # Mv is applied here and in the friction below
     M_exp = torch.cat( (M[0,0:1],M[0], M[0,-1:]), dim =0)
@@ -270,8 +269,8 @@ def reconstruct_flow_depth_torch(H, Z, M, N, params):
     # x方向通量
     z1_M = Z[:-1, :]
     z2_M = Z[1:, :]
-    h1_M = H[1, :-1, :] #new H
-    h2_M = H[1, 1:, :]
+    h1_M = H[0, :-1, :] #new H
+    h2_M = H[0, 1:, :]
     flux_sign_M, h1u_M, h2u_M = check_flux_direction_torch(z1_M, z2_M, h1_M, h2_M, dry_limit)
 
     m0 = M[0]
@@ -288,8 +287,8 @@ def reconstruct_flow_depth_torch(H, Z, M, N, params):
     # y方向通量
     z1_N = Z[:, :-1]
     z2_N = Z[:, 1:]
-    h1_N = H[1, :, :-1]
-    h2_N = H[1, :, 1:]
+    h1_N = H[0, :, :-1]
+    h2_N = H[0, :, 1:]
     flux_sign_N, h1u_N, h2u_N = check_flux_direction_torch(z1_N, z2_N, h1_N, h2_N, dry_limit)
 
     n0 = N[0]

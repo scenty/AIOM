@@ -101,7 +101,7 @@ class Params_tsunami:
     def __init__(self):
         # ------------------ 新增代码 ------------------
         # 读取 XYZ 数据来确定经纬度网格
-        ds_xyz = xr.open_dataset('Data/tsunami_grid_1.0.nc')
+        ds_xyz = xr.open_dataset(f'Data/tsunami_grid_1.0.nc')
         lon = ds_xyz['lon'].values  # 假设单位是度，如果需要转换为物理距离，请根据经纬度转化公式
         lat = ds_xyz['lat'].values
         self.lon = lon 
