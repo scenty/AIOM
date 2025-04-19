@@ -130,7 +130,7 @@ class Params_tsunami:
         self.manning = manning_x.unsqueeze(1).repeat(1, self.Ny+1)
         
         # 其它物理、数值参数
-        self.dry_limit = torch.tensor(100.0, device=device, dtype=torch.float64)
+        self.dry_limit = 0.2
         self.MinWaterDepth = torch.tensor(0.01, device=device, dtype=torch.float64)
         self.FrictionDepthLimit = torch.tensor(5e-3, device=device, dtype=torch.float64)
         self.f_cor = torch.tensor(0.0, device=device, dtype=torch.float64)

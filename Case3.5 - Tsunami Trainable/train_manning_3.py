@@ -182,12 +182,13 @@ def simulation_step(H, M, N, params, manning):
 manning0 = manning_array[1].to(device)
 
 num_epochs = 100
-inner_steps = 20
+inner_steps = 5
 
 for epoch in range(1, num_epochs+1):
     model.train()
     # 初始化 H、M、N
-    H = torch.zeros((2, params.Nx+1, params.Ny+1), device=device, dtype=torch.float64); H[0] = H_ini
+    H = torch.zeros((2, params.Nx+1, params.Ny+1), device=device, dtype=torch.float64)
+    H[0] = H_ini
     M = torch.zeros((2, params.Nx,   params.Ny+1), device=device, dtype=torch.float64)
     N = torch.zeros((2, params.Nx+1, params.Ny),   device=device, dtype=torch.float64)
     t = 0
@@ -202,13 +203,30 @@ for epoch in range(1, num_epochs+1):
         M = torch.roll(M_pred.detach(), shifts=-1, dims=0)
         N = torch.roll(N_pred.detach(), shifts=-1, dims=0)
         t += 1
-
+        fig = plt.figure(figsize=(12,8))
+        var = dd(u2rho(M[-1],'expand'))
+        pcolormesh(dd(X), dd(Y), var, vmin=-1, vmax=1, cmap=plt.cm.RdBu_r);
+        colorbar()
+        axis('equal')
+        xlim(120, 300)  # 经度范围
+        ylim(-50, 60)   # 纬度范围
+        from scipy.io import loadmat
+        cc = loadmat(r'E:\OneDrive\plot\coastlines.mat')
+        plot(cc['coastlon'],cc['coastlat'],'k-',linewidth = .1)
+        #quiver(Xc, Yc, uc, vc, scale=10000, color='k')     
+        plot(lon,lat,'k.')
+        xlabel("Lon", fontname="serif", fontsize=12)
+        ylabel("Lat", fontname="serif", fontsize=12)
+        title("Stage at an instant in time: " + f"{t*params.dt}" + " second")
+        show()
+        
         mask = torch.zeros_like(H_pred[1], dtype=torch.bool, device=device)
         mask[meas_indices[:, 0], meas_indices[:, 1]] = True
         simulated = torch.masked_select(H_pred[1], mask)
         num_zeros = int((simulated == 0).sum().item())
         print(f"  After step {t}/{params.NT}: zeros in simulated = {num_zeros}/{simulated.numel()}")
-
+        
+        
         if not training_enabled:
             if num_zeros > 12:
                 continue
@@ -265,7 +283,9 @@ for epoch in range(1, num_epochs+1):
             H = torch.roll(H_mid.detach(), shifts=-1, dims=0)
             M = torch.roll(M_mid.detach(), shifts=-1, dims=0)
             N = torch.roll(N_mid.detach(), shifts=-1, dims=0)
-            t +=1
+            #t +=1
+            
+
     print(f"Epoch {epoch} loss={total_epoch_loss:.6f}")
 
 
