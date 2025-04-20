@@ -137,7 +137,7 @@ class Params_tsunami:
         
         # 时间参数
         self.dt = torch.tensor(60.0, device=device, dtype=torch.float64)
-        self.NT = int(40500 // 60)  # 或者直接存为 python 整数
+        self.NT = 673 #int(40500 // 60)-2  # 或者直接存为 python 整数
         self.centerWeighting0 = torch.tensor(0.9998, device=device, dtype=torch.float64)
         
         # 边界条件设置（保持列表形式即可）

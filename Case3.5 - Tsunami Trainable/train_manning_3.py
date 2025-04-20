@@ -21,6 +21,7 @@ import scipy.io as sio
 #from radam import RAdam  # 或 pip install radam，具体看第三方库
 from torchviz import make_dot      
 import torch.utils.checkpoint as checkpoint
+from visualization import plot_dart
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -76,10 +77,10 @@ u_resized = F.interpolate(u_tensor.unsqueeze(1),
 v_resized = F.interpolate(v_tensor.unsqueeze(1), 
                           size=target_size, mode='bilinear', align_corners=False).squeeze(1)
 
-manning_array = torch.zeros((2, params.Nx+1, params.Ny+1))
+manning0 = torch.ones((params.Nx+1, params.Ny+1)).to(device) * 1e-6
 
 X_tensor = torch.stack([eta_tensor, u_resized, v_resized], dim=1)  
-Y_tensor = torch.tensor(manning_array, dtype=torch.float64)        
+#Y_tensor = torch.tensor(manning_array, dtype=torch.float64)        
 X_tensor.requires_grad = True
 
 # 从 mat 文件中加载数据，返回的是一个字典
@@ -90,32 +91,25 @@ dart_array = data_filtered['h_all_highpass']
 
 # 转换为 torch tensor，数据类型为 float32
 dart_tensor = torch.tensor(dart_array, dtype=torch.float64, device=device) 
-
-
+dart_time = data_filtered['time'].squeeze(0)
+dart_time = np.array([np.datetime64(x[0]) for x in dart_time]) 
+dart_list = data_filtered['buoy_ids']
 # 文件中应存储 'lon'、'lat'（以及其它数据）
-lon = data_filtered['lon']  # 可能形状为 (16, 1) 或 (16,)
-lat = data_filtered['lat']
+lon = data_filtered['lon'].squeeze()  # 可能形状为 (16, 1) 或 (16,)
+lat = data_filtered['lat'].squeeze()
+# 去除21416
+dart_list = np.delete(dart_list,6)
+dart_tensor = torch.cat((dart_tensor[:6],dart_tensor[7:]))
+lon = np.delete(lon,6)
+lat = np.delete(lat,6)
 
-# 将 lon, lat 压缩成一维数组
-lon = np.squeeze(lon)
-lat = np.squeeze(lat)
-
-# print("浮标经度：", lon)
-# print("浮标纬度：", lat)
-
-# 如果保存的经纬度就是模拟域坐标（例如 x 和 y 均在 [0, Lx] 和 [0, Ly] 范围内），
-# 下面直接利用线性空间找到最近的网格索引。如果不是，需要根据实际情况进行坐标变换。
-
-x_grid = np.linspace(120, 220, params.Nx + 1)
-# 对于纬度，我们这里用 buoy 数据的最小值和最大值，也可以根据实际情况设定固定范围
-y_grid = np.linspace(-20, 60, params.Ny + 1)
 
 # 依次遍历每个浮标，找出最近的网格索引
 meas_indices = []  # 用于存放 16 个点位在 H 中的索引，如 [(ix0, iy0), (ix1, iy1), ...]
 for i in range(len(lon)):
     # 这里假设 lon 对应 x 方向，lat 对应 y 方向
-    ix = np.argmin(np.abs(x_grid - lon[i]))
-    iy = np.argmin(np.abs(y_grid - lat[i]))
+    ix = np.argmin(np.abs(params.lon - lon[i]))
+    iy = np.argmin(np.abs(params.lat - lat[i]))
     meas_indices.append((ix, iy))
     print(f"浮标 {i}（经度 {lon[i]}， 纬度 {lat[i]}） 对应网格索引: (ix={ix}, iy={iy})")
 
@@ -163,6 +157,7 @@ def simulation_step(H, M, N, params, manning):
     
     H0, H1 = H_new[0], H_new[1]
     H1 = torch.where(land_mask, torch.zeros_like(H1), H1)
+    H0 = torch.where(land_mask, torch.zeros_like(H0), H0)
     H_upd = torch.stack([H0, H1], dim=0)
     
     M_new, N_new, _, _ = momentum_nonlinear_cartesian_torch(
@@ -171,15 +166,15 @@ def simulation_step(H, M, N, params, manning):
 
     M0, M1 = M_new[0], M_new[1]
     M1 = torch.where(land_mask[:-1, :], torch.zeros_like(M1), M1)
+    M0 = torch.where(land_mask[:-1, :], torch.zeros_like(M0), M0)
     M_upd = torch.stack([M0, M1], dim=0)
 
     N0, N1 = N_new[0], N_new[1]
     N1 = torch.where(land_mask[:, :-1], torch.zeros_like(N1), N1)
+    N0 = torch.where(land_mask[:, :-1], torch.zeros_like(N0), N0)
     N_upd = torch.stack([N0, N1], dim=0)
 
     return H_upd, M_upd, N_upd
-
-manning0 = manning_array[1].to(device)
 
 num_epochs = 100
 inner_steps = 5
@@ -194,7 +189,7 @@ for epoch in range(1, num_epochs+1):
     t = 0
     training_enabled = False
     total_epoch_loss = 0.0
-
+    model_dart_list = []
     while t < params.NT:
         # —— plain step —— 
         H_pred, M_pred, N_pred = simulation_step(H, M, N, params, manning0)
@@ -203,42 +198,48 @@ for epoch in range(1, num_epochs+1):
         M = torch.roll(M_pred.detach(), shifts=-1, dims=0)
         N = torch.roll(N_pred.detach(), shifts=-1, dims=0)
         t += 1
-        fig = plt.figure(figsize=(12,8))
-        var = dd(u2rho(M[-1],'expand'))
-        pcolormesh(dd(X), dd(Y), var, vmin=-1, vmax=1, cmap=plt.cm.RdBu_r);
-        colorbar()
-        axis('equal')
-        xlim(120, 300)  # 经度范围
-        ylim(-50, 60)   # 纬度范围
-        from scipy.io import loadmat
-        cc = loadmat(r'E:\OneDrive\plot\coastlines.mat')
-        plot(cc['coastlon'],cc['coastlat'],'k-',linewidth = .1)
-        #quiver(Xc, Yc, uc, vc, scale=10000, color='k')     
-        plot(lon,lat,'k.')
-        xlabel("Lon", fontname="serif", fontsize=12)
-        ylabel("Lat", fontname="serif", fontsize=12)
-        title("Stage at an instant in time: " + f"{t*params.dt}" + " second")
-        show()
         
-        mask = torch.zeros_like(H_pred[1], dtype=torch.bool, device=device)
-        mask[meas_indices[:, 0], meas_indices[:, 1]] = True
-        simulated = torch.masked_select(H_pred[1], mask)
-        num_zeros = int((simulated == 0).sum().item())
-        print(f"  After step {t}/{params.NT}: zeros in simulated = {num_zeros}/{simulated.numel()}")
+        #mask = torch.zeros_like(H_pred[1], dtype=torch.bool, device=device)
+        #mask[meas_indices[:, 0], meas_indices[:, 1]] = True
+        simulated = H_pred[1][meas_indices[:,0],meas_indices[:,1]]
         
+        threshold = 1e-6
+        num_near_zero = int((simulated.abs() < threshold).sum().item())
+        print(f"  After step {t}/{params.NT}: zeros in simulated = {num_near_zero}/{simulated.numel()}")
         
-        if not training_enabled:
-            if num_zeros > 12:
-                continue
-            else:
-                print("→ 开启训练")
-                training_enabled = True
+        model_dart_list.append(dd(simulated))
+        
+        if t%10 == 0:
+            # 面场可视化
+            fig = plt.figure(figsize=(12,8))
+            #var = dd(u2rho(M[-1],'expand'))
+            var = dd(H_pred[-1])
+            pcolormesh(dd(X), dd(Y), var, vmin=-1, vmax=1, cmap=plt.cm.RdBu_r);
+            colorbar()
+            axis('equal')
+            xlim(120, 220)  # 经度范围
+            ylim(-20, 60)   # 纬度范围
+            from scipy.io import loadmat
+            cc = loadmat(r'E:\OneDrive\plot\coastlines.mat')
+            plot(cc['coastlon'],cc['coastlat'],'k-',linewidth = .1)
+            #quiver(Xc, Yc, uc, vc, scale=10000, color='k')     
+            plot(lon,lat,'k.')
+            xlabel("Lon", fontname="serif", fontsize=12)
+            ylabel("Lat", fontname="serif", fontsize=12)
+            title("Stage at an instant in time: " + f"{t*params.dt}" + " second")
+            show()
+            # 站点可视化
+            
+            var = np.array(model_dart_list)
+            plot_dart(dart_time, dd(dart_tensor), dart_list, t, var)
+        
         # —— 训练分支 —— 
-        if training_enabled:
+        if num_near_zero >12:
+            print("→ 开启训练")
             # ① 保存本 time-step 的基准状态
             H_base, M_base, N_base = H.clone(), M.clone(), N.clone()
         
-            H_mid = M_mid = N_mid = None
+            #H_mid = M_mid = N_mid = None
             for inner in range(inner_steps):
                 # ② 每次都从基准状态 clone
                 H_seg, M_seg, N_seg = H_base.clone(), M_base.clone(), N_base.clone()
@@ -268,8 +269,9 @@ for epoch in range(1, num_epochs+1):
                 H_extra = torch.stack([H0e, H1e], dim=0)
         
                 # ⑥ 计算 loss（同一个 time-step, 一直用 H_extra[1]）
-                simulated_seg = torch.masked_select(H_extra[1], mask)
-                loss = criterion(simulated_seg, dart_tensor[:, t+1])
+                simulated_seg = H_extra[1][meas_indices[:,0],meas_indices[:,1]]
+                loss = criterion(simulated_seg, dart_tensor[:, t-1])
+                
                 print(f"    inner {inner+1}/{inner_steps} — loss = {loss.item():.16f}")
         
                 # ⑦ 反向并更新模型；但不要修改 H_base
