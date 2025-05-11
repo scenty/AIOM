@@ -22,7 +22,7 @@ device = torch.device('cpu')
 dt = params.dt
 NT = params.NT
 # 读取网格
-ds_grid = xr.open_dataset('Data/tsunami_grid_1.0.nc')
+ds_grid = xr.open_dataset('Data/tsunami_grid_0.1.nc')
 x = torch.from_numpy(ds_grid['lon'][:].values)
 y = torch.from_numpy(ds_grid['lat'][:].values)
 X, Y = torch.meshgrid(x, y, indexing='ij')

@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
-from All_params import Params_small,Params_large,Params_tsunami                                            
+from All_params import Params_tsunami_tenth                                           
 from dynamics_train import mass_cartesian_torch,momentum_nonlinear_cartesian_torch
 import torch.nn as nn
 import torch.optim as optim
@@ -25,16 +25,17 @@ from visualization import plot_dart
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cpu'
 print(device)
 
 case = 'tsunami'
 
-params = Params_tsunami(device)
+params = Params_tsunami_tenth()
 
 dt = params.dt
 NT = params.NT
 
-ds_grid = xr.open_dataset('Data/tsunami_grid_1.nc')
+ds_grid = xr.open_dataset(r"Data\tsunami_grid_0.1.nc")
 x = torch.from_numpy(ds_grid['lon'][:].values)
 y = torch.from_numpy(ds_grid['lat'][:].values)
 
@@ -54,6 +55,21 @@ H_ini = H_ini.T  # 调整为 [51, 81]，与模型网格一致
 H_ini = torch.nan_to_num(H_ini, nan=0.0)
 H = torch.zeros((2, params.Nx+1, params.Ny+1), dtype=torch.float64).to(device)
 H[0] = H_ini  
+
+# fig = plt.figure(figsize=(12,8))
+# pcolormesh(dd(X), dd(Y), H_ini, vmin=-1, vmax=1, cmap=plt.cm.RdBu_r);
+# colorbar()
+# axis('equal')
+# xlim(120, 300)  # 经度范围
+# ylim(-50, 60)   # 纬度范围
+# from scipy.io import loadmat
+# cc = loadmat(r'E:\OneDrive\plot\coastlines.mat')
+# plot(cc['coastlon'],cc['coastlat'],'k-',linewidth = .1)   
+# xlabel("Lon", fontname="serif", fontsize=12)
+# ylabel("Lat", fontname="serif", fontsize=12)
+# title("Stage at an instant in time: " + f"{itime*params.dt}" + " second")
+# show()
+
 
 M = torch.zeros((2, params.Nx, params.Ny+1)).to(device)
 N = torch.zeros((2, params.Nx+1, params.Ny)).to(device)
@@ -77,7 +93,7 @@ u_resized = F.interpolate(u_tensor.unsqueeze(1),
 v_resized = F.interpolate(v_tensor.unsqueeze(1), 
                           size=target_size, mode='bilinear', align_corners=False).squeeze(1)
 
-manning0 = torch.ones((params.Nx+1, params.Ny+1)).to(device) * 1e-6
+manning0 = torch.ones((params.Nx+1, params.Ny+1)).to(device) * 0
 
 X_tensor = torch.stack([eta_tensor, u_resized, v_resized], dim=1)  
 #Y_tensor = torch.tensor(manning_array, dtype=torch.float64)        
@@ -209,7 +225,7 @@ for epoch in range(1, num_epochs+1):
         
         model_dart_list.append(dd(simulated))
         
-        if t%10 == 0:
+        if t%20 == 0:
             # 面场可视化
             fig = plt.figure(figsize=(12,8))
             #var = dd(u2rho(M[-1],'expand'))
@@ -217,8 +233,8 @@ for epoch in range(1, num_epochs+1):
             pcolormesh(dd(X), dd(Y), var, vmin=-1, vmax=1, cmap=plt.cm.RdBu_r);
             colorbar()
             axis('equal')
-            xlim(120, 220)  # 经度范围
-            ylim(-20, 60)   # 纬度范围
+            xlim(120, 300)  # 经度范围
+            ylim(-50, 60)   # 纬度范围
             from scipy.io import loadmat
             cc = loadmat(r'E:\OneDrive\plot\coastlines.mat')
             plot(cc['coastlon'],cc['coastlat'],'k-',linewidth = .1)
@@ -228,21 +244,22 @@ for epoch in range(1, num_epochs+1):
             ylabel("Lat", fontname="serif", fontsize=12)
             title("Stage at an instant in time: " + f"{t*params.dt}" + " second")
             show()
+            
             # 站点可视化
             
             var = np.array(model_dart_list)
             plot_dart(dart_time, dd(dart_tensor), dart_list, t, var)
         
         # —— 训练分支 —— 
-        if num_near_zero >12:
+        if num_near_zero <12:
             print("→ 开启训练")
             # ① 保存本 time-step 的基准状态
-            H_base, M_base, N_base = H.clone(), M.clone(), N.clone()
+            #H_base, M_base, N_base = H.clone(), M.clone(), N.clone()
         
             #H_mid = M_mid = N_mid = None
             for inner in range(inner_steps):
                 # ② 每次都从基准状态 clone
-                H_seg, M_seg, N_seg = H_base.clone(), M_base.clone(), N_base.clone()
+                H_seg, M_seg, N_seg = H.clone(), M.clone(), N.clone()
         
                 # ③ 构造模型输入
                 inp = torch.stack([
@@ -270,7 +287,7 @@ for epoch in range(1, num_epochs+1):
         
                 # ⑥ 计算 loss（同一个 time-step, 一直用 H_extra[1]）
                 simulated_seg = H_extra[1][meas_indices[:,0],meas_indices[:,1]]
-                loss = criterion(simulated_seg, dart_tensor[:, t-1])
+                loss = criterion(simulated_seg, dart_tensor[:, t//3+2])
                 
                 print(f"    inner {inner+1}/{inner_steps} — loss = {loss.item():.16f}")
         
@@ -285,7 +302,7 @@ for epoch in range(1, num_epochs+1):
             H = torch.roll(H_mid.detach(), shifts=-1, dims=0)
             M = torch.roll(M_mid.detach(), shifts=-1, dims=0)
             N = torch.roll(N_mid.detach(), shifts=-1, dims=0)
-            #t +=1
+            t +=1
             
 
     print(f"Epoch {epoch} loss={total_epoch_loss:.6f}")

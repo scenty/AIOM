@@ -12,6 +12,7 @@ from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cpu'
 
 def mass_cartesian_torch(H, Z, M, N, params):
     CC1 = params.CC1
