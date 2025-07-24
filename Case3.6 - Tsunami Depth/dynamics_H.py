@@ -12,6 +12,7 @@ from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
 from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = 'cpu'
 
 def mass_cartesian_torch(H, Z, M, N, params):
     CC1 = params.CC1
@@ -931,8 +932,8 @@ def bcond_zeta_vec(H, Z, params, tide_z=None):
     
     #mask_rho = Z > params.dry_limit
     mask_rho =  (H1+Z >= params.MinWaterDepth) #deeper than MinWaterDepth
-    mask_rho = mask_rho.to('cuda:0')
-    H1 = torch.where(mask_rho, H1, torch.tensor(0.0, dtype=torch.float64, device='cuda:0'))
+    mask_rho = mask_rho.to(device)
+    H1 = torch.where(mask_rho, H1, torch.tensor(0.0, dtype=torch.float64, device=device))
     H = torch.stack((H0,H1),0)
     
     

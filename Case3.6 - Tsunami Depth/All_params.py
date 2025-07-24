@@ -51,7 +51,7 @@ class Params_large:
 class Params_tsunami:
     def __init__(self, device):
         # 读取经纬度信息（假设来自一个 netCDF 文件）
-        ds_xyz = xr.open_dataset('Data/tsunami_grid_0.1.nc')
+        ds_xyz = xr.open_dataset('Data/tsunami_grid_1.0.nc')
         lon = ds_xyz['lon'].values  # 单位：度
         lat = ds_xyz['lat'].values
         self.lon = lon

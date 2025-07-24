@@ -12,6 +12,8 @@ Legacy/
 *.dfsu
 *.nc
 *.npy
+*.rar
+*.pdf
 
 # Compiled Object files
 *.slo

@@ -9,7 +9,7 @@ import xarray as xr
 import torch
 import torch.nn.functional as F
 from tool_train import ddx,ddy,rho2u,rho2v,v2rho,u2rho,dd
-from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up
+from tool_train import ududx_up,vdudy_up,udvdx_up,vdvdy_up,tic,toc
 from All_params import Params_large,Params_tsunami                                            
 from dynamics_H import mass_cartesian_torch,momentum_nonlinear_cartesian_torch
 import torch.nn as nn
@@ -25,6 +25,7 @@ from visualization import plot_dart
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = 'cpu'
 print(device)
 
 case = 'tsunami'
@@ -34,7 +35,7 @@ params = Params_tsunami(device)
 dt = params.dt
 NT = params.NT
 
-ds_grid = xr.open_dataset('Data/tsunami_grid_0.1.nc')
+ds_grid = xr.open_dataset('Data/tsunami_grid_1.0.nc')
 x = torch.from_numpy(ds_grid['lon'][:].values)
 y = torch.from_numpy(ds_grid['lat'][:].values)
 
@@ -98,9 +99,6 @@ dart_list = np.delete(dart_list,6)
 dart_tensor = torch.cat((dart_tensor[:6],dart_tensor[7:]))
 lon = np.delete(lon,6)
 lat = np.delete(lat,6)
-
-# 4. 转 torch（只需按需做一次）
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 x_grid = np.linspace(120, 220, params.Nx + 1)
 # 对于纬度，我们这里用 buoy 数据的最小值和最大值，也可以根据实际情况设定固定范围
@@ -207,7 +205,9 @@ for epoch in range(1, num_epochs+1):
 
     while t < params.NT:
         # —— plain step —— 
+        tic()
         H_pred, M_pred, N_pred = simulation_step(H, M, N, params, Z_pred)
+        toc()
         # detach + roll
         H = torch.roll(H_pred.detach(), shifts=-1, dims=0)
         M = torch.roll(M_pred.detach(), shifts=-1, dims=0)
